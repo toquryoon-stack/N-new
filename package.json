@@ -1,7 +1,7 @@
 {
   "name": "dalmuti",
   "version": "1.0.0",
-  "description": "달무티 (The Great Dalmuti) 카드 게임 - 콘솔 / 네트워크 / 디스코드 봇",
+  "description": "달무리 (The Great Dalmuti) 카드 게임 - 콘솔 / 네트워크 / 디스코드 봇",
   "main": "dalmuti.js",
   "scripts": {
     "start": "node dalmuti.js",

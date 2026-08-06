@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 // -*- coding: utf-8 -*-
 /**
- * 달무티 (The Great Dalmuti) - 콘솔 카드 게임
+ * 달무리 (The Great Dalmuti) - 콘솔 카드 게임
  *
- * Node.js 콘솔 기반 달무티 카드 게임
+ * Node.js 콘솔 기반 달무리 카드 게임
  * - 혼자 vs AI / 로컬 멀티 / 혼합 모드 지원
  * - 네트워크 멀티플레이 (같은 Wi-Fi/공유기에서 각자 PC로 접속) 지원
  * - 4~8인 플레이 가능
@@ -18,7 +18,7 @@ const os = require("os");
 // ════════════════════════════════════════
 
 const CARD_NAMES = {
-  1: "달무티", 2: "대주교", 3: "원수", 4: "남작부인",
+  1: "달무리", 2: "대주교", 3: "원수", 4: "남작부인",
   5: "수녀원장", 6: "기사", 7: "재봉사", 8: "석공",
   9: "요리사", 10: "양치기", 11: "농부", 12: "빈민",
   13: "조커"
@@ -110,8 +110,8 @@ function handSummary(hand) {
 
 /** 순위에 따른 칭호 */
 function getTitle(position, total) {
-  if (position === 0) return "대달무티 👑";
-  if (position === 1) return "달무티";
+  if (position === 0) return "대달무리 👑";
+  if (position === 1) return "달무리";
   if (position === total - 1) return "대빈민 💀";
   if (position === total - 2) return "빈민";
   return "시민";
@@ -362,10 +362,10 @@ class DalmutiGame {
     console.log(`${C.BOLD}${C.CYAN}`);
     console.log("╔═══════════════════════════════════════╗");
     console.log("║                                       ║");
-    console.log("║     🎴  달 무 티  (Dalmuti)  🎴      ║");
+    console.log("║     🎴  달 무 리  (Dalmuti)  🎴      ║");
     console.log("║                                       ║");
     console.log("║    카드를 가장 먼저 내려놓는 자가      ║");
-    console.log("║          대달무티가 되리라!            ║");
+    console.log("║          대달무리가 되리라!            ║");
     console.log("║                                       ║");
     console.log("╚═══════════════════════════════════════╝");
     console.log(`${C.RESET}\n`);
@@ -576,7 +576,7 @@ class DalmutiGame {
     const n = this.players.length;
 
     console.log(`${C.BOLD}${C.CYAN}╔══════════════════════════════════════════════╗`);
-    console.log(`║  🎴 달무티 - 라운드 ${String(this.roundNum).padEnd(3)}                    ║`);
+    console.log(`║  🎴 달무리 - 라운드 ${String(this.roundNum).padEnd(3)}                    ║`);
     console.log(`╠══════════════════════════════════════════════╣${C.RESET}`);
 
     for (let i = 0; i < n; i++) {
@@ -627,7 +627,7 @@ class DalmutiGame {
     const lines = [];
 
     lines.push(`${C.BOLD}${C.CYAN}╔══════════════════════════════════════════════╗`);
-    lines.push(`║  🎴 달무티 - 라운드 ${String(this.roundNum).padEnd(3)}                    ║`);
+    lines.push(`║  🎴 달무리 - 라운드 ${String(this.roundNum).padEnd(3)}                    ║`);
     lines.push(`╠══════════════════════════════════════════════╣${C.RESET}`);
 
     for (let i = 0; i < n; i++) {
@@ -718,7 +718,7 @@ class DalmutiGame {
     this.broadcast(`  📜 카드 교환`);
     this.broadcast(`${"═".repeat(44)}${C.RESET}\n`);
 
-    // 대빈민 → 대달무티: 최고 카드 2장 (가장 낮은 숫자)
+    // 대빈민 → 대달무리: 최고 카드 2장 (가장 낮은 숫자)
     greatPeon.sortHand();
     const bestCards = [];
     for (const card of [...greatPeon.hand]) {
@@ -735,12 +735,12 @@ class DalmutiGame {
         greatDalmuti.hand.push(card);
       }
     }
-    this.broadcast(`  ${greatPeon.name}(대빈민) → ${greatDalmuti.name}(대달무티): [${bestCards.join(", ")}]`);
+    this.broadcast(`  ${greatPeon.name}(대빈민) → ${greatDalmuti.name}(대달무리): [${bestCards.join(", ")}]`);
 
-    // 대달무티 → 대빈민: 아무 카드 2장
+    // 대달무리 → 대빈민: 아무 카드 2장
     await this.giveCards(greatDalmuti, greatPeon, 2);
 
-    // 빈민 → 달무티: 최고 카드 1장
+    // 빈민 → 달무리: 최고 카드 1장
     peon.sortHand();
     let bestCard = peon.hand.find((c) => c !== 13);
     if (bestCard === undefined && peon.hand.length > 0) bestCard = peon.hand[0];
@@ -749,10 +749,10 @@ class DalmutiGame {
       const idx = peon.hand.indexOf(bestCard);
       peon.hand.splice(idx, 1);
       dalmuti.hand.push(bestCard);
-      this.broadcast(`  ${peon.name}(빈민) → ${dalmuti.name}(달무티): [${bestCard}]`);
+      this.broadcast(`  ${peon.name}(빈민) → ${dalmuti.name}(달무리): [${bestCard}]`);
     }
 
-    // 달무티 → 빈민: 아무 카드 1장
+    // 달무리 → 빈민: 아무 카드 1장
     await this.giveCards(dalmuti, peon, 1);
 
     for (const p of this.players) p.sortHand();
@@ -1101,9 +1101,9 @@ class DalmutiGame {
     this.broadcastClear();
     this.broadcast(`\n  ${C.BOLD}라운드 ${this.roundNum} 시작!${C.RESET}`);
     if (this.roundNum === 1) {
-      this.broadcast(`  ${this.players[leaderIdx].name}이(가) [1] 달무티 카드를 갖고 있어 선으로 시작!`);
+      this.broadcast(`  ${this.players[leaderIdx].name}이(가) [1] 달무리 카드를 갖고 있어 선으로 시작!`);
     } else {
-      this.broadcast(`  ${this.players[leaderIdx].name}(대달무티)이(가) 선으로 시작!`);
+      this.broadcast(`  ${this.players[leaderIdx].name}(대달무리)이(가) 선으로 시작!`);
     }
     await ask("  [Enter] 계속...");
 
@@ -1256,10 +1256,10 @@ async function runNetworkClient() {
 async function showRules() {
   clear();
   console.log(`
-${C.BOLD}${C.CYAN}📜 달무티 규칙${C.RESET}
+${C.BOLD}${C.CYAN}📜 달무리 규칙${C.RESET}
 
 ${C.YELLOW}[카드 구성]${C.RESET}
-  • 1(달무티) × 1장, 2(대주교) × 2장, ... 12(빈민) × 12장
+  • 1(달무리) × 1장, 2(대주교) × 2장, ... 12(빈민) × 12장
   • 조커(★) × 2장 → 총 80장
   • ${C.RED}숫자가 낮을수록 강한 카드!${C.RESET}
 
@@ -1275,12 +1275,12 @@ ${C.YELLOW}[조커 ★]${C.RESET}
   • 다른 카드와 함께 사용 (예: 5를 3장 낼 때 조커 1장 + 5카드 2장)
 
 ${C.YELLOW}[계급 & 카드 교환]${C.RESET}
-  • 1등 = 대달무티 👑, 꼴등 = 대빈민 💀
+  • 1등 = 대달무리 👑, 꼴등 = 대빈민 💀
   • 다음 라운드 시작 전 교환:
-    - 대빈민 → 대달무티: 최고 카드 2장 강제 헌납
-    - 대달무티 → 대빈민: 아무 카드 2장 하사
-    - 빈민 → 달무티: 최고 카드 1장
-    - 달무티 → 빈민: 아무 카드 1장
+    - 대빈민 → 대달무리: 최고 카드 2장 강제 헌납
+    - 대달무리 → 대빈민: 아무 카드 2장 하사
+    - 빈민 → 달무리: 최고 카드 1장
+    - 달무리 → 빈민: 아무 카드 1장
 
 ${C.YELLOW}[혁명 🔥]${C.RESET}
   • 대빈민이 조커 2장을 모두 갖고 있으면 혁명!
@@ -1314,7 +1314,7 @@ async function main() {
 ${C.BOLD}${C.CYAN}
   ╔═══════════════════════════════════════╗
   ║                                       ║
-  ║     🎴  달 무 티  (Dalmuti)  🎴      ║
+  ║     🎴  달 무 리  (Dalmuti)  🎴      ║
   ║                                       ║
   ║     The Great Dalmuti Card Game       ║
   ║                                       ║

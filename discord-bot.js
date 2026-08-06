@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // -*- coding: utf-8 -*-
 /**
- * 달무티 디스코드 봇
+ * 달무리 디스코드 봇
  *
  * dalmuti.js의 카드 규칙 로직(Player/AIPlayer 등)을 그대로 재사용하고,
  * 콘솔 입출력 대신 디스코드 버튼/드롭다운으로 진행합니다.
@@ -10,7 +10,7 @@
  *   1. npm install
  *   2. discord-config.example.json 을 discord-config.json 으로 복사 후 token/clientId 입력
  *   3. node discord-bot.js
- *   4. 디스코드 채널에서 /달무티 입력
+ *   4. 디스코드 채널에서 /달무리 입력
  */
 
 const fs = require("fs");
@@ -71,7 +71,7 @@ function buildLobbyEmbed(lobby) {
   const names = [...lobby.players.values()].map((p) => `🙂 ${p.username}`).join("\n") || "-";
   const aiCount = Math.max(0, lobby.total - lobby.players.size);
   return new EmbedBuilder()
-    .setTitle("🎴 달무티 - 참가자 모집")
+    .setTitle("🎴 달무리 - 참가자 모집")
     .setColor(0x57f287)
     .setDescription(
       `아래 **참가하기** 버튼을 눌러 참여하세요.\n호스트(<@${lobby.hostId}>)가 **게임 시작**을 누르면 시작합니다.`
@@ -281,7 +281,7 @@ function buildPublicEmbed(game, opts = {}) {
   }
 
   const embed = new EmbedBuilder()
-    .setTitle(`🎴 달무티 - 라운드 ${game.roundNum}`)
+    .setTitle(`🎴 달무리 - 라운드 ${game.roundNum}`)
     .setColor(0x5865f2)
     .addFields({ name: "플레이어", value: lines.join("\n") || "-" });
 
@@ -639,7 +639,7 @@ async function cardExchange(game) {
       greatDalmuti.hand.push(card);
     }
   }
-  logEvent(game, `${greatPeon.name}(대빈민) → ${greatDalmuti.name}(대달무티): 최고 카드 2장 헌납 [${bestCards.join(", ")}]`);
+  logEvent(game, `${greatPeon.name}(대빈민) → ${greatDalmuti.name}(대달무리): 최고 카드 2장 헌납 [${bestCards.join(", ")}]`);
 
   await giveCards(game, greatDalmuti, greatPeon, 2);
 
@@ -650,7 +650,7 @@ async function cardExchange(game) {
     const idx = peon.hand.indexOf(bestCard);
     peon.hand.splice(idx, 1);
     dalmuti.hand.push(bestCard);
-    logEvent(game, `${peon.name}(빈민) → ${dalmuti.name}(달무티): 최고 카드 1장 [${bestCard}]`);
+    logEvent(game, `${peon.name}(빈민) → ${dalmuti.name}(달무리): 최고 카드 1장 [${bestCard}]`);
   }
 
   await giveCards(game, dalmuti, peon, 1);
@@ -705,9 +705,9 @@ async function playRound(game) {
 
   logEvent(game, `🎬 라운드 ${game.roundNum} 시작!`);
   if (game.roundNum === 1) {
-    logEvent(game, `${game.players[leaderIdx].name}이(가) [1] 달무티 카드를 갖고 있어 선으로 시작!`);
+    logEvent(game, `${game.players[leaderIdx].name}이(가) [1] 달무리 카드를 갖고 있어 선으로 시작!`);
   } else {
-    logEvent(game, `${game.players[leaderIdx].name}(대달무티)이(가) 선으로 시작!`);
+    logEvent(game, `${game.players[leaderIdx].name}(대달무리)이(가) 선으로 시작!`);
   }
   await postLog(game);
 
@@ -880,7 +880,7 @@ async function handleSelect(interaction) {
 }
 
 async function handleSlashCommand(interaction) {
-  if (interaction.commandName !== "달무티") return;
+  if (interaction.commandName !== "달무리") return;
   const channelId = interaction.channelId;
   if (games.has(channelId)) {
     return interaction.reply({ content: "이미 이 채널에서 게임이 진행 중입니다.", flags: MessageFlags.Ephemeral });
@@ -911,7 +911,7 @@ client.once(Events.ClientReady, async (c) => {
   console.log(`로그인 완료: ${c.user.tag}`);
 
   const commands = [
-    new SlashCommandBuilder().setName("달무티").setDescription("달무티 게임 참가자를 모집합니다.").toJSON(),
+    new SlashCommandBuilder().setName("달무리").setDescription("달무리 게임 참가자를 모집합니다.").toJSON(),
   ];
   const rest = new REST({ version: "10" }).setToken(config.token);
   try {
