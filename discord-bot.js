@@ -321,15 +321,12 @@ function buildActionRow(turnKind) {
 
 async function postStatus(game, embed, rows) {
   const payload = { embeds: [embed], components: rows };
-  try {
-    if (game.statusMessage) {
-      game.statusMessage = await game.statusMessage.edit(payload);
-      return;
-    }
-  } catch (e) {
-    // 메시지가 삭제되었거나 편집 실패 시 새로 보냄
-  }
+  const prevMessage = game.statusMessage;
   game.statusMessage = await game.channel.send(payload);
+  if (prevMessage) {
+    // 이전 상태 메시지는 버튼을 없애서 더 이상 누를 수 없게 함 (최신 메시지만 조작 가능)
+    prevMessage.edit({ components: [] }).catch(() => {});
+  }
 }
 
 async function postLog(game, opts = {}) {
