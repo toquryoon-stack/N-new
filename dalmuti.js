@@ -1346,8 +1346,22 @@ ${C.RESET}
   }
 }
 
-main().catch((err) => {
-  console.error(err);
-  rl.close();
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch((err) => {
+    console.error(err);
+    rl.close();
+    process.exit(1);
+  });
+}
+
+// 다른 스크립트(예: 디스코드 봇)에서 카드 규칙 로직을 재사용할 수 있도록 export
+module.exports = {
+  CARD_NAMES,
+  createDeck,
+  shuffle,
+  countCards,
+  getTitle,
+  cardStr,
+  Player,
+  AIPlayer,
+};

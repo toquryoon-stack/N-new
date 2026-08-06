@@ -1,0 +1,5 @@
+{
+  "token": "여기에 디스코드 봇 토큰을 입력하세요 (Discord Developer Portal > Bot > Reset Token)",
+  "clientId": "여기에 애플리케이션(클라이언트) ID를 입력하세요 (Discord Developer Portal > General Information)",
+  "guildId": "선택사항: 테스트용 서버(길드) ID. 비워두면 전역 등록(반영까지 최대 1시간)"
+}
