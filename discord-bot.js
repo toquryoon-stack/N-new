@@ -268,6 +268,16 @@ function autoPickGiveIndices(player, count) {
 // 화면(상태 메시지) 렌더링
 // ════════════════════════════════════════
 
+// 디스코드 "ansi" 코드블록에서 지원하는 색상 (데스크톱 클라이언트에서 실제 색으로 렌더링됨)
+const ANSI = {
+  reset: "[0m",
+  bold: "[1m",
+  dim: "[2m",
+  boldYellow: "[1;33m",
+  boldGreen: "[1;32m",
+  boldCyan: "[1;36m",
+};
+
 function buildPublicEmbed(game, opts = {}) {
   const n = game.players.length;
   const lines = [];
@@ -275,23 +285,29 @@ function buildPublicEmbed(game, opts = {}) {
     const p = game.players[i];
     const isAI = p instanceof AIPlayer;
     const tag = isAI ? "🤖" : "🙂";
-    const marker = opts.currentIdx === i ? " ◀ **차례**" : "";
+    const isCurrent = opts.currentIdx === i;
     const status = p.finished ? `✅ ${getTitle(p.finishOrder, n)}` : `카드 ${p.hand.length}장`;
-    lines.push(`${tag} **${p.name}** — ${status}${marker}`);
+    if (isCurrent) {
+      lines.push(`${ANSI.boldGreen}▶ ${tag} ${p.name} — ${status}  (지금 차례!)${ANSI.reset}`);
+    } else if (p.finished) {
+      lines.push(`${ANSI.dim}${tag} ${p.name} — ${status}${ANSI.reset}`);
+    } else {
+      lines.push(`${tag} ${p.name} — ${status}`);
+    }
   }
 
   const embed = new EmbedBuilder()
     .setTitle(`🎴 달무리 - 라운드 ${game.roundNum}`)
     .setColor(0x5865f2)
-    .addFields({ name: "플레이어", value: lines.join("\n") || "-" });
+    .addFields({ name: "플레이어", value: "```ansi\n" + lines.join("\n") + "\n```" });
 
   if (opts.tableRank !== undefined && opts.tableRank !== null) {
-    embed.addFields({
-      name: "바닥",
-      value: `[${cardStr(opts.tableRank)}] ${CARD_NAMES[opts.tableRank]} × ${opts.tableCount}장 (${opts.tablePlayerName})`,
-    });
+    const cardText = `[${cardStr(opts.tableRank)}] ${CARD_NAMES[opts.tableRank]} × ${opts.tableCount}장`;
+    const tableBlock =
+      `${ANSI.boldYellow}${cardText}${ANSI.reset}\n` + `${ANSI.dim}낸 사람:${ANSI.reset} ${ANSI.boldCyan}${opts.tablePlayerName}${ANSI.reset}`;
+    embed.addFields({ name: "🃏 바닥 (현재 낼 기준)", value: "```ansi\n" + tableBlock + "\n```" });
   } else {
-    embed.addFields({ name: "바닥", value: "비어있음 (선)" });
+    embed.addFields({ name: "🃏 바닥 (현재 낼 기준)", value: "```ansi\n" + ANSI.dim + "비어있음 (선)" + ANSI.reset + "\n```" });
   }
 
   if (game.log.length > 0) {
