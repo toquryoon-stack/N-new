@@ -438,13 +438,8 @@ class DalmutiGame {
     const hostName = (await ask("  당신(호스트)의 이름: ")) || "호스트";
     this.players.push(new Player(hostName, true, localIO));
 
-    let remoteCount;
-    while (true) {
-      const inp = await ask(`  원격(다른 PC) 플레이어 수 (0-${total - 1}): `);
-      remoteCount = parseInt(inp);
-      if (remoteCount >= 0 && remoteCount <= total - 1) break;
-      console.log(`  0~${total - 1} 사이로 입력해주세요.`);
-    }
+    // 원격 인원 수를 미리 정하지 않음 - 접속한 사람 수만큼만 사람, 나머지는 AI로 자동 채움
+    const maxRemote = total - 1;
 
     let port;
     while (true) {
@@ -467,13 +462,23 @@ class DalmutiGame {
     this.server = server;
     const connected = [];
 
+    const printWaitingStatus = () => {
+      const aiIfStartNow = maxRemote - connected.length;
+      console.log(
+        `  ${C.GREEN}현재 접속: ${connected.length}/${maxRemote}명${C.RESET}` +
+          `  ${C.DIM}(지금 시작하면 AI ${aiIfStartNow}명이 빈 자리를 채웁니다)${C.RESET}`
+      );
+    };
+
     await new Promise((resolve, reject) => {
       server.once("error", (err) => {
         console.log(`  ${C.RED}서버 오류: ${err.message}${C.RESET}`);
         reject(err);
       });
       server.listen(port, () => {
-        console.log(`  ${C.GREEN}서버가 포트 ${port}에서 대기 중입니다...${C.RESET}\n`);
+        console.log(`  ${C.GREEN}서버가 포트 ${port}에서 대기 중입니다...${C.RESET}`);
+        console.log(`  ${C.YELLOW}사람이 최대 ${maxRemote}명까지 참여할 수 있습니다.${C.RESET}`);
+        console.log(`  ${C.YELLOW}[Enter]를 누르면 지금까지 접속한 사람 + AI로 바로 시작합니다.${C.RESET}\n`);
         resolve();
       });
     });
@@ -481,7 +486,7 @@ class DalmutiGame {
     server.on("connection", async (socket) => {
       socket.on("error", () => {});
       const { line, rest } = await readFirstLine(socket);
-      if (connected.length >= remoteCount) {
+      if (connected.length >= maxRemote) {
         // 이미 정원이 찼으면 정중히 거절
         socket.write(`${C.RED}이미 정원이 다 찼습니다. 연결을 종료합니다.${C.RESET}\n`);
         socket.end();
@@ -491,15 +496,30 @@ class DalmutiGame {
       const io = new SocketIO(socket, name);
       if (rest) io._onData(Buffer.from(rest, "utf8"));
       connected.push({ name, io });
-      io.write(`${C.GREEN}접속 완료! 다른 플레이어를 기다리는 중...${C.RESET}\n`);
-      console.log(`  ${C.GREEN}✔ ${name} 접속함 (${connected.length}/${remoteCount})${C.RESET}`);
+      io.write(`${C.GREEN}접속 완료! 호스트가 게임을 시작하기를 기다리는 중...${C.RESET}\n`);
+      console.log(`  ${C.GREEN}✔ ${name} 님이 참여했습니다.${C.RESET}`);
+      printWaitingStatus();
     });
 
-    if (remoteCount > 0) {
-      while (connected.length < remoteCount) {
-        await sleep(500);
-      }
-    }
+    // 정원이 다 찼거나, 호스트가 [Enter]를 누르면 대기 종료 (남은 자리는 AI로 채움)
+    await new Promise((resolve) => {
+      let done = false;
+      const finish = () => {
+        if (done) return;
+        done = true;
+        rl.removeListener("line", onEnter);
+        resolve();
+      };
+      const onEnter = () => finish();
+      rl.once("line", onEnter);
+
+      (async () => {
+        while (!done && connected.length < maxRemote) {
+          await sleep(300);
+        }
+        finish();
+      })();
+    });
 
     server.close(); // 이후 새 접속은 받지 않음 (이미 연결된 소켓은 유지)
 
@@ -511,6 +531,8 @@ class DalmutiGame {
     for (let i = 0; i < aiCount; i++) {
       this.players.push(new AIPlayer(`AI-${i + 1}`));
     }
+
+    console.log(`\n  ${C.GREEN}사람 ${connected.length}명 + AI ${aiCount}명으로 시작합니다.${C.RESET}`);
   }
 
   // ──── 카드 배분 ────
@@ -1274,6 +1296,8 @@ ${C.YELLOW}[네트워크 멀티플레이]${C.RESET}
   • 호스트 화면에 표시되는 IP 주소:포트를 다른 플레이어들에게 알려줍니다
   • 다른 플레이어는 각자 자기 PC에서 게임을 실행하고
     메인 메뉴 "2. 네트워크 게임 참가"에서 그 주소로 접속하면 됩니다
+  • 몇 명이 참여할지 미리 정할 필요 없음 - 사람들이 들어오는 대로 대기실에 표시되고,
+    호스트가 [Enter]를 누르면 그 시점까지 접속한 사람 + 나머지는 AI로 채워서 바로 시작합니다
   • 접속 후에는 각자 자기 패만 자신의 화면에서 볼 수 있습니다
 `);
   await ask("  [Enter] 돌아가기...");
