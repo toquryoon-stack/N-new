@@ -32,7 +32,8 @@ const {
 
 const { CARD_NAMES, createDeck, shuffle, getTitle, cardStr, Player, AIPlayer } = require("./dalmuti.js");
 
-const TURN_TIMEOUT_MS = 5 * 60 * 1000; // 5분 무응답 시 자동 진행
+const TURN_TIMEOUT_MS = 30 * 1000; // 카드 내기/패스/카드교환 제한시간 (30초)
+const CONTINUE_TIMEOUT_MS = 5 * 60 * 1000; // 다음 라운드 진행 여부 제한시간
 
 // ════════════════════════════════════════
 // 설정 로드
@@ -184,7 +185,7 @@ async function lobbyStart(interaction) {
 // ════════════════════════════════════════
 
 /** 특정 플레이어의 행동을 기다림. 시간 초과 시 onTimeout() 결과로 자동 진행 */
-function waitForPlayerAction(game, player, kind, data, onTimeout) {
+function waitForPlayerAction(game, player, kind, data, onTimeout, timeoutMs = TURN_TIMEOUT_MS) {
   return new Promise((resolve) => {
     let done = false;
     const timer = setTimeout(() => {
@@ -192,13 +193,14 @@ function waitForPlayerAction(game, player, kind, data, onTimeout) {
       done = true;
       game.pending = null;
       resolve(onTimeout ? onTimeout() : null);
-    }, TURN_TIMEOUT_MS);
+    }, timeoutMs);
 
     game.pending = {
       playerId: player.discordId,
       player,
       kind,
       data,
+      deadline: Date.now() + timeoutMs,
       resolve: (val) => {
         if (done) return;
         done = true;
@@ -218,11 +220,12 @@ function waitForHostChoice(game) {
       done = true;
       game.pending = null;
       resolve(false);
-    }, TURN_TIMEOUT_MS);
+    }, CONTINUE_TIMEOUT_MS);
 
     game.pending = {
       playerId: game.hostId,
       kind: "continue",
+      deadline: Date.now() + CONTINUE_TIMEOUT_MS,
       resolve: (val) => {
         if (done) return;
         done = true;
@@ -312,6 +315,14 @@ function buildPublicEmbed(game, opts = {}) {
 
   if (game.log.length > 0) {
     embed.addFields({ name: "진행 로그", value: game.log.slice(-10).join("\n").slice(0, 1024) });
+  }
+
+  if (game.pending && game.pending.deadline) {
+    const sec = Math.round(game.pending.deadline / 1000);
+    embed.addFields({
+      name: "⏰ 제한시간",
+      value: `<t:${sec}:R> 까지 응답이 없으면 자동으로 진행됩니다.`,
+    });
   }
   return embed;
 }
