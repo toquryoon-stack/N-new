@@ -68,9 +68,17 @@ const games = new Map(); // channelId -> game
 // 로비(참가자 모집)
 // ════════════════════════════════════════
 
+function estimatedDeckSize(maxRank) {
+  let size = 2; // 조커 2장
+  for (let r = 1; r <= maxRank; r++) size += r;
+  return size;
+}
+
 function buildLobbyEmbed(lobby) {
   const names = [...lobby.players.values()].map((p) => `🙂 ${p.username}`).join("\n") || "-";
   const aiCount = Math.max(0, lobby.total - lobby.players.size);
+  const deckSize = estimatedDeckSize(lobby.maxRank);
+  const perPlayer = Math.floor(deckSize / lobby.total);
   return new EmbedBuilder()
     .setTitle("🎴 달무리 - 참가자 모집")
     .setColor(0x57f287)
@@ -82,6 +90,10 @@ function buildLobbyEmbed(lobby) {
       {
         name: "총 인원",
         value: `${lobby.total}명 (사람 ${lobby.players.size}명 + 부족한 자리는 AI ${aiCount}명이 채웁니다)`,
+      },
+      {
+        name: "카드 숫자 범위",
+        value: `1 ~ ${lobby.maxRank} (+조커 2장) — 1인당 약 ${perPlayer}장`,
       }
     );
 }
@@ -91,13 +103,24 @@ function buildLobbyComponents(lobby) {
     .setCustomId("lobby_total")
     .setPlaceholder(`총 인원: ${lobby.total}명 (호스트만 변경 가능)`)
     .addOptions([4, 5, 6, 7, 8].map((n) => ({ label: `${n}명`, value: String(n), default: n === lobby.total })));
+  const maxRankSelect = new StringSelectMenuBuilder()
+    .setCustomId("lobby_maxrank")
+    .setPlaceholder(`카드 숫자 범위: 1~${lobby.maxRank} (호스트만 변경 가능)`)
+    .addOptions(
+      [6, 7, 8, 9, 10, 11, 12].map((n) => ({
+        label: `1~${n} (${n === 12 ? "기본" : "적게"}, 1인당 약 ${Math.floor(estimatedDeckSize(n) / lobby.total)}장)`,
+        value: String(n),
+        default: n === lobby.maxRank,
+      }))
+    );
   const row1 = new ActionRowBuilder().addComponents(totalSelect);
-  const row2 = new ActionRowBuilder().addComponents(
+  const row2 = new ActionRowBuilder().addComponents(maxRankSelect);
+  const row3 = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId("lobby_join").setLabel("참가하기").setStyle(ButtonStyle.Success),
     new ButtonBuilder().setCustomId("lobby_leave").setLabel("나가기").setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId("lobby_start").setLabel("게임 시작").setStyle(ButtonStyle.Primary)
   );
-  return [row1, row2];
+  return [row1, row2, row3];
 }
 
 async function refreshLobby(interaction, lobby) {
@@ -139,6 +162,16 @@ async function lobbySetTotal(interaction) {
   await refreshLobby(interaction, lobby);
 }
 
+async function lobbySetMaxRank(interaction) {
+  const lobby = lobbies.get(interaction.channelId);
+  if (!lobby) return interaction.reply({ content: "모집 중인 게임이 없습니다.", flags: MessageFlags.Ephemeral });
+  if (interaction.user.id !== lobby.hostId) {
+    return interaction.reply({ content: "호스트만 카드 숫자 범위를 바꿀 수 있습니다.", flags: MessageFlags.Ephemeral });
+  }
+  lobby.maxRank = parseInt(interaction.values[0]);
+  await refreshLobby(interaction, lobby);
+}
+
 async function lobbyStart(interaction) {
   const lobby = lobbies.get(interaction.channelId);
   if (!lobby) return interaction.reply({ content: "모집 중인 게임이 없습니다.", flags: MessageFlags.Ephemeral });
@@ -162,6 +195,7 @@ async function lobbyStart(interaction) {
     channel: lobby.channel,
     hostId: lobby.hostId,
     players,
+    maxRank: lobby.maxRank,
     roundNum: 0,
     rankings: [],
     scores: {},
@@ -239,6 +273,14 @@ function waitForHostChoice(game) {
 
 function logEvent(game, text) {
   game.log.push(text);
+}
+
+/** 턴 행동 창에 항상 같이 보여줄 손패 요약 (별도 "내 패 보기" 없이도 확인 가능하도록) */
+function formatHandLines(player) {
+  const counts = player.counts();
+  const ranks = Object.keys(counts).map(Number).sort((a, b) => a - b);
+  const lines = ranks.map((r) => (r === 13 ? `★ 조커 × ${counts[r]}` : `[${r}] ${CARD_NAMES[r]} × ${counts[r]}`));
+  return `**내 패** (${player.hand.length}장)\n${lines.join("\n")}`;
 }
 
 function autoPickGiveIndices(player, count) {
@@ -327,23 +369,25 @@ function buildPublicEmbed(game, opts = {}) {
   return embed;
 }
 
+/** 턴 종류에 맞는 버튼 행을 만듦. 누를 게 없으면 null (빈 ActionRow는 디스코드가 거부함) */
 function buildActionRow(turnKind) {
   const row = new ActionRowBuilder();
+  if (turnKind === "continue") {
+    row.addComponents(
+      new ButtonBuilder().setCustomId("cont_yes").setLabel("다음 라운드").setStyle(ButtonStyle.Success),
+      new ButtonBuilder().setCustomId("cont_no").setLabel("게임 종료").setStyle(ButtonStyle.Danger)
+    );
+    return row;
+  }
   if (turnKind) {
     const label = turnKind === "give" ? "카드 선택하기" : "카드 내기";
     row.addComponents(new ButtonBuilder().setCustomId("act_play").setLabel(label).setStyle(ButtonStyle.Primary));
     if (turnKind === "follow") {
       row.addComponents(new ButtonBuilder().setCustomId("act_pass").setLabel("패스").setStyle(ButtonStyle.Secondary));
     }
+    return row;
   }
-  if (turnKind === "continue") {
-    row.addComponents(
-      new ButtonBuilder().setCustomId("cont_yes").setLabel("다음 라운드").setStyle(ButtonStyle.Success),
-      new ButtonBuilder().setCustomId("cont_no").setLabel("게임 종료").setStyle(ButtonStyle.Danger)
-    );
-  }
-  row.addComponents(new ButtonBuilder().setCustomId("hand_view").setLabel("내 패 보기").setStyle(ButtonStyle.Secondary));
-  return row;
+  return null;
 }
 
 async function postStatus(game, embed, rows) {
@@ -357,12 +401,14 @@ async function postStatus(game, embed, rows) {
 }
 
 async function postLog(game, opts = {}) {
-  await postStatus(game, buildPublicEmbed(game, opts), [buildActionRow(null)]);
+  const row = buildActionRow(null);
+  await postStatus(game, buildPublicEmbed(game, opts), row ? [row] : []);
 }
 
 async function showTurn(game, currentIdx, tableRank, tableCount, tablePlayerName, turnKind) {
   const embed = buildPublicEmbed(game, { currentIdx, tableRank, tableCount, tablePlayerName });
-  await postStatus(game, embed, [buildActionRow(turnKind)]);
+  const row = buildActionRow(turnKind);
+  await postStatus(game, embed, row ? [row] : []);
 }
 
 // ════════════════════════════════════════
@@ -395,7 +441,7 @@ async function openLeadRankSelect(interaction, game) {
     .setPlaceholder("낼 카드 숫자를 선택하세요")
     .addOptions(options.slice(0, 25));
   await interaction.reply({
-    content: "낼 카드의 숫자를 선택하세요.",
+    content: `${formatHandLines(player)}\n\n낼 카드의 숫자를 선택하세요.`,
     components: [new ActionRowBuilder().addComponents(select)],
     flags: MessageFlags.Ephemeral,
   });
@@ -407,7 +453,7 @@ async function openFollowSelect(interaction, game) {
   const plays = player.getValidPlays(reqCount, reqRank);
   if (plays.length === 0) {
     await interaction.reply({
-      content: "낼 수 있는 카드가 없습니다. 패스를 눌러주세요.",
+      content: `${formatHandLines(player)}\n\n낼 수 있는 카드가 없습니다. **패스** 버튼을 눌러주세요.`,
       flags: MessageFlags.Ephemeral,
     });
     return;
@@ -422,7 +468,7 @@ async function openFollowSelect(interaction, game) {
     .setPlaceholder("낼 카드를 선택하세요")
     .addOptions(options.slice(0, 25));
   await interaction.reply({
-    content: `[${reqRank}]보다 낮은 숫자로 ${reqCount}장을 내세요.`,
+    content: `${formatHandLines(player)}\n\n[${reqRank}]보다 낮은 숫자로 ${reqCount}장을 내세요.`,
     components: [new ActionRowBuilder().addComponents(select)],
     flags: MessageFlags.Ephemeral,
   });
@@ -442,27 +488,8 @@ async function openGiveSelect(interaction, game) {
     .setMaxValues(count)
     .addOptions(options);
   await interaction.reply({
-    content: `${receiverName}에게 줄 카드 ${count}장을 선택하세요.`,
+    content: `${formatHandLines(player)}\n\n${receiverName}에게 줄 카드 ${count}장을 선택하세요.`,
     components: [new ActionRowBuilder().addComponents(select)],
-    flags: MessageFlags.Ephemeral,
-  });
-}
-
-async function showHand(interaction) {
-  const game = games.get(interaction.channelId);
-  if (!game) return interaction.reply({ content: "진행 중인 게임이 없습니다.", flags: MessageFlags.Ephemeral });
-  const player = game.players.find((p) => p.discordId === interaction.user.id);
-  if (!player) {
-    return interaction.reply({ content: "이 게임에 참가하지 않으셨습니다.", flags: MessageFlags.Ephemeral });
-  }
-  if (player.hand.length === 0) {
-    return interaction.reply({ content: "패가 없습니다 (완료했거나 아직 배분 전입니다).", flags: MessageFlags.Ephemeral });
-  }
-  const counts = player.counts();
-  const ranks = Object.keys(counts).map(Number).sort((a, b) => a - b);
-  const lines = ranks.map((r) => (r === 13 ? `★ 조커 × ${counts[r]}` : `[${r}] ${CARD_NAMES[r]} × ${counts[r]}`));
-  await interaction.reply({
-    content: `**${player.name}님의 패** (${player.hand.length}장)\n${lines.join("\n")}`,
     flags: MessageFlags.Ephemeral,
   });
 }
@@ -472,7 +499,7 @@ async function showHand(interaction) {
 // ════════════════════════════════════════
 
 function dealCards(game) {
-  const deck = shuffle(createDeck());
+  const deck = shuffle(createDeck(game.maxRank || 12));
   for (const p of game.players) {
     p.hand = [];
     p.finished = false;
@@ -513,9 +540,7 @@ async function promptLead(game, leaderIdx) {
 
 async function promptFollow(game, currentIdx, reqRank, reqCount, trickWinnerName) {
   const player = game.players[currentIdx];
-  if (!player.canPlay(reqCount, reqRank)) {
-    return null;
-  }
+  // 낼 수 있는 카드가 없어도 자동 패스하지 않고, 패스 버튼을 직접 누르게 함
   const promise = waitForPlayerAction(game, player, "follow", { reqRank, reqCount }, () => {
     logEvent(game, `⏰ ${player.name}님이 시간 내에 응답하지 않아 자동 패스합니다.`);
     return null;
@@ -525,6 +550,7 @@ async function promptFollow(game, currentIdx, reqRank, reqCount, trickWinnerName
 }
 
 async function playTrick(game, leaderIdx) {
+  game.log = []; // 트릭이 바뀔 때마다 로그를 비워서 이전 트릭 내용과 섞이지 않게 함
   const leader = game.players[leaderIdx];
   const n = game.players.length;
 
@@ -801,7 +827,6 @@ async function handleButton(interaction) {
   if (customId === "lobby_join") return lobbyJoin(interaction);
   if (customId === "lobby_leave") return lobbyLeave(interaction);
   if (customId === "lobby_start") return lobbyStart(interaction);
-  if (customId === "hand_view") return showHand(interaction);
 
   if (customId === "cont_yes" || customId === "cont_no") {
     const game = games.get(interaction.channelId);
@@ -845,6 +870,7 @@ async function handleButton(interaction) {
 
 async function handleSelect(interaction) {
   if (interaction.customId === "lobby_total") return lobbySetTotal(interaction);
+  if (interaction.customId === "lobby_maxrank") return lobbySetMaxRank(interaction);
 
   const game = games.get(interaction.channelId);
   if (!game || !game.pending || game.pending.playerId !== interaction.user.id) {
@@ -923,6 +949,7 @@ async function handleSlashCommand(interaction) {
     channel: interaction.channel,
     players: new Map([[interaction.user.id, { id: interaction.user.id, username: interaction.user.username }]]),
     total: 4,
+    maxRank: 12,
   };
   lobbies.set(channelId, lobby);
   await interaction.reply({ embeds: [buildLobbyEmbed(lobby)], components: buildLobbyComponents(lobby) });

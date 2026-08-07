@@ -64,9 +64,9 @@ function sleep(ms) {
 }
 
 /** 카드 80장 덱 생성 */
-function createDeck() {
+function createDeck(maxRank = 12) {
   const deck = [];
-  for (let rank = 1; rank <= 12; rank++) {
+  for (let rank = 1; rank <= maxRank; rank++) {
     for (let i = 0; i < rank; i++) deck.push(rank);
   }
   deck.push(13, 13); // 조커 2장
