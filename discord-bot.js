@@ -30,7 +30,7 @@ const {
   MessageFlags,
 } = require("discord.js");
 
-const { CARD_NAMES, createDeck, shuffle, getTitle, cardStr, Player, AIPlayer } = require("./dalmuti.js");
+const { createDeck, shuffle, getTitle, Player, AIPlayer } = require("./dalmuti.js");
 
 const TURN_TIMEOUT_MS = 30 * 1000; // 카드 내기/패스/카드교환 제한시간 (30초)
 const CONTINUE_TIMEOUT_MS = 5 * 60 * 1000; // 다음 라운드 진행 여부 제한시간
@@ -275,12 +275,29 @@ function logEvent(game, text) {
   game.log.push(text);
 }
 
-/** 턴 행동 창에 항상 같이 보여줄 손패 요약 (별도 "내 패 보기" 없이도 확인 가능하도록) */
-function formatHandLines(player) {
+/** 랭크 숫자를 색깔 있는 뱃지로 표시 (카드 이름은 생략, 숫자만) */
+function cardBadge(rank, color) {
+  const symbol = rank === 13 ? "★" : rank;
+  return `${color}[${symbol}]${ANSI.reset}`;
+}
+
+function ansiBlock(text) {
+  return "```ansi\n" + text + "\n```";
+}
+
+/**
+ * 턴 행동 창에 항상 같이 보여줄 손패 요약 (별도 "내 패 보기" 없이도 확인 가능하도록).
+ * validRanks가 주어지면 그 숫자만 초록색(지금 낼 수 있음)으로, 나머지는 흐리게 표시.
+ * validRanks가 null이면 전부 낼 수 있는 상황(선 낼 때, 카드 교환 등)이므로 전부 초록색으로 표시.
+ */
+function formatHandLines(player, validRanks = null) {
   const counts = player.counts();
   const ranks = Object.keys(counts).map(Number).sort((a, b) => a - b);
-  const lines = ranks.map((r) => (r === 13 ? `★ 조커 × ${counts[r]}` : `[${r}] ${CARD_NAMES[r]} × ${counts[r]}`));
-  return `**내 패** (${player.hand.length}장)\n${lines.join("\n")}`;
+  const lines = ranks.map((r) => {
+    const color = r === 13 ? ANSI.boldMagenta : validRanks === null || validRanks.has(r) ? ANSI.boldGreen : ANSI.dim;
+    return `${cardBadge(r, color)} × ${counts[r]}장`;
+  });
+  return `**내 패** (${player.hand.length}장)\n` + ansiBlock(lines.join("\n"));
 }
 
 function autoPickGiveIndices(player, count) {
@@ -321,6 +338,7 @@ const ANSI = {
   boldYellow: "[1;33m",
   boldGreen: "[1;32m",
   boldCyan: "[1;36m",
+  boldMagenta: "[1;35m",
 };
 
 function buildPublicEmbed(game, opts = {}) {
@@ -344,19 +362,18 @@ function buildPublicEmbed(game, opts = {}) {
   const embed = new EmbedBuilder()
     .setTitle(`🎴 달무리 - 라운드 ${game.roundNum}`)
     .setColor(0x5865f2)
-    .addFields({ name: "플레이어", value: "```ansi\n" + lines.join("\n") + "\n```" });
+    .addFields({ name: "플레이어", value: ansiBlock(lines.join("\n")) });
 
   if (opts.tableRank !== undefined && opts.tableRank !== null) {
-    const cardText = `[${cardStr(opts.tableRank)}] ${CARD_NAMES[opts.tableRank]} × ${opts.tableCount}장`;
-    const tableBlock =
-      `${ANSI.boldYellow}${cardText}${ANSI.reset}\n` + `${ANSI.dim}낸 사람:${ANSI.reset} ${ANSI.boldCyan}${opts.tablePlayerName}${ANSI.reset}`;
-    embed.addFields({ name: "🃏 바닥 (현재 낼 기준)", value: "```ansi\n" + tableBlock + "\n```" });
+    const cardText = `${cardBadge(opts.tableRank, ANSI.boldYellow)} × ${opts.tableCount}장`;
+    const tableBlock = `${cardText}\n${ANSI.dim}낸 사람:${ANSI.reset} ${ANSI.boldCyan}${opts.tablePlayerName}${ANSI.reset}`;
+    embed.addFields({ name: "🃏 바닥 (현재 낼 기준)", value: ansiBlock(tableBlock) });
   } else {
-    embed.addFields({ name: "🃏 바닥 (현재 낼 기준)", value: "```ansi\n" + ANSI.dim + "비어있음 (선)" + ANSI.reset + "\n```" });
+    embed.addFields({ name: "🃏 바닥 (현재 낼 기준)", value: ansiBlock(`${ANSI.dim}비어있음 (선)${ANSI.reset}`) });
   }
 
   if (game.log.length > 0) {
-    embed.addFields({ name: "진행 로그", value: game.log.slice(-10).join("\n").slice(0, 1024) });
+    embed.addFields({ name: "진행 로그 (이번 트릭)", value: ansiBlock(game.log.slice(-10).join("\n").slice(0, 1000)) });
   }
 
   if (game.pending && game.pending.deadline) {
@@ -432,7 +449,7 @@ async function openLeadRankSelect(interaction, game) {
   }
 
   const options = ranks.map((r) => ({
-    label: `[${r}] ${CARD_NAMES[r]}`,
+    label: `[${r}] × ${counts[r]}장`,
     description: `보유 ${counts[r]}장${jokers > 0 ? ` (+조커 ${jokers}장 사용 가능)` : ""}`,
     value: String(r),
   }));
@@ -441,7 +458,7 @@ async function openLeadRankSelect(interaction, game) {
     .setPlaceholder("낼 카드 숫자를 선택하세요")
     .addOptions(options.slice(0, 25));
   await interaction.reply({
-    content: `${formatHandLines(player)}\n\n낼 카드의 숫자를 선택하세요.`,
+    content: `${formatHandLines(player)}\n\n낼 카드의 숫자를 선택하세요. (초록색 = 지금 낼 수 있는 카드)`,
     components: [new ActionRowBuilder().addComponents(select)],
     flags: MessageFlags.Ephemeral,
   });
@@ -453,14 +470,15 @@ async function openFollowSelect(interaction, game) {
   const plays = player.getValidPlays(reqCount, reqRank);
   if (plays.length === 0) {
     await interaction.reply({
-      content: `${formatHandLines(player)}\n\n낼 수 있는 카드가 없습니다. **패스** 버튼을 눌러주세요.`,
+      content: `${formatHandLines(player, new Set())}\n\n낼 수 있는 카드가 없습니다. **패스** 버튼을 눌러주세요.`,
       flags: MessageFlags.Ephemeral,
     });
     return;
   }
   game.pending.validPlays = plays;
+  const validRanks = new Set(plays.map((p) => p.rank));
   const options = plays.map((p, i) => ({
-    label: `[${p.rank}] ${CARD_NAMES[p.rank]} × ${p.count}장${p.jokerCount > 0 ? ` (조커 ${p.jokerCount})` : ""}`,
+    label: `[${p.rank}] × ${p.count}장${p.jokerCount > 0 ? ` (조커 ${p.jokerCount})` : ""}`,
     value: String(i),
   }));
   const select = new StringSelectMenuBuilder()
@@ -468,7 +486,7 @@ async function openFollowSelect(interaction, game) {
     .setPlaceholder("낼 카드를 선택하세요")
     .addOptions(options.slice(0, 25));
   await interaction.reply({
-    content: `${formatHandLines(player)}\n\n[${reqRank}]보다 낮은 숫자로 ${reqCount}장을 내세요.`,
+    content: `${formatHandLines(player, validRanks)}\n\n[${reqRank}]보다 낮은 숫자로 ${reqCount}장을 내세요. (초록색 = 지금 낼 수 있는 카드)`,
     components: [new ActionRowBuilder().addComponents(select)],
     flags: MessageFlags.Ephemeral,
   });
@@ -478,7 +496,7 @@ async function openGiveSelect(interaction, game) {
   const player = game.pending.player;
   const { count, receiverName } = game.pending.data;
   const options = player.hand.map((card, i) => ({
-    label: card === 13 ? "★ 조커" : `[${card}] ${CARD_NAMES[card]}`,
+    label: card === 13 ? "★ 조커" : `[${card}]`,
     value: String(i),
   }));
   const select = new StringSelectMenuBuilder()
@@ -569,7 +587,7 @@ async function playTrick(game, leaderIdx) {
 
   leader.removeCards(play.rank, play.count, play.jokerCount);
   const jokerStr = play.jokerCount > 0 ? ` (조커 ${play.jokerCount}장 포함)` : "";
-  logEvent(game, `▶ **${leader.name}**: [${play.rank}] ${CARD_NAMES[play.rank]} × ${play.count}장${jokerStr}`);
+  logEvent(game, `⭕ ${leader.name}: ${cardBadge(play.rank, ANSI.boldYellow)} × ${play.count}장${jokerStr}`);
 
   let currentRank = play.rank;
   let currentCount = play.count;
@@ -579,7 +597,7 @@ async function playTrick(game, leaderIdx) {
     leader.finished = true;
     leader.finishOrder = game.finishedPlayers.length;
     game.finishedPlayers.push(leaderIdx);
-    logEvent(game, `🎉 **${leader.name}** 완료! → ${getTitle(leader.finishOrder, n)}`);
+    logEvent(game, `🎉 ${leader.name} 완료! → ${getTitle(leader.finishOrder, n)}`);
   }
 
   const passedPlayers = new Set();
@@ -606,12 +624,12 @@ async function playTrick(game, leaderIdx) {
     }
 
     if (result === null) {
-      logEvent(game, `⏭ **${player.name}**: 패스`);
+      logEvent(game, `❌ ${player.name}: 패스`);
       passedPlayers.add(currentIdx);
     } else {
       player.removeCards(result.rank, result.count, result.jokerCount);
       const jStr = result.jokerCount > 0 ? ` (조커 ${result.jokerCount}장 포함)` : "";
-      logEvent(game, `▶ **${player.name}**: [${result.rank}] ${CARD_NAMES[result.rank]} × ${result.count}장${jStr}`);
+      logEvent(game, `⭕ ${player.name}: ${cardBadge(result.rank, ANSI.boldYellow)} × ${result.count}장${jStr}`);
       currentRank = result.rank;
       trickWinnerIdx = currentIdx;
       passedPlayers.clear();
@@ -620,7 +638,7 @@ async function playTrick(game, leaderIdx) {
         player.finished = true;
         player.finishOrder = game.finishedPlayers.length;
         game.finishedPlayers.push(currentIdx);
-        logEvent(game, `🎉 **${player.name}** 완료! → ${getTitle(player.finishOrder, n)}`);
+        logEvent(game, `🎉 ${player.name} 완료! → ${getTitle(player.finishOrder, n)}`);
       }
     }
     currentIdx = nextActive(game, currentIdx);
@@ -628,7 +646,7 @@ async function playTrick(game, leaderIdx) {
 
   const activeLeft = game.players.filter((p) => !p.finished);
   if (activeLeft.length > 1 && !game.players[trickWinnerIdx].finished) {
-    logEvent(game, `🏆 **${game.players[trickWinnerIdx].name}**님이 트릭 승리!`);
+    logEvent(game, `🏆 ${game.players[trickWinnerIdx].name}님이 트릭 승리!`);
   }
   await postLog(game);
 
@@ -672,7 +690,7 @@ async function cardExchange(game) {
 
   const jokerCount = greatPeon.hand.filter((c) => c === 13).length;
   if (jokerCount === 2) {
-    logEvent(game, `🔥 혁명! **${greatPeon.name}**이(가) 조커 2장 보유! 카드 교환이 취소됩니다!`);
+    logEvent(game, `🔥 혁명! ${greatPeon.name}이(가) 조커 2장 보유! 카드 교환이 취소됩니다!`);
     await postLog(game);
     return;
   }
@@ -894,7 +912,7 @@ async function handleSelect(interaction) {
       .setPlaceholder("몇 장을 내시겠습니까?")
       .addOptions(options.slice(0, 25));
     await interaction.update({
-      content: `[${rank}] ${CARD_NAMES[rank]} 선택됨. 몇 장을 내시겠습니까?`,
+      content: ansiBlock(cardBadge(rank, ANSI.boldGreen)) + " 선택됨. 몇 장을 내시겠습니까?",
       components: [new ActionRowBuilder().addComponents(select)],
     });
     return;
@@ -906,7 +924,10 @@ async function handleSelect(interaction) {
     const player = game.pending.player;
     const available = player.counts()[rank] || 0;
     const jokerCount = Math.max(0, count - available);
-    await interaction.update({ content: `✅ [${rank}] ${CARD_NAMES[rank]} × ${count}장 냅니다.`, components: [] });
+    await interaction.update({
+      content: `✅ ${ansiBlock(cardBadge(rank, ANSI.boldGreen))} × ${count}장 냅니다.`,
+      components: [],
+    });
     game.pending.resolve({ rank, count, jokerCount });
     return;
   }
@@ -915,7 +936,7 @@ async function handleSelect(interaction) {
     const idx = parseInt(interaction.values[0]);
     const play = game.pending.validPlays[idx];
     await interaction.update({
-      content: `✅ [${play.rank}] ${CARD_NAMES[play.rank]} × ${play.count}장 냅니다.`,
+      content: `✅ ${ansiBlock(cardBadge(play.rank, ANSI.boldGreen))} × ${play.count}장 냅니다.`,
       components: [],
     });
     game.pending.resolve(play);
