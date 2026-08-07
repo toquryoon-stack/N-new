@@ -266,6 +266,7 @@ async def _run_round(channel: discord.abc.Messageable, game: Game):
     log.info(f"라운드 {round_num} 시작 (채널: {game.channel_id})")
 
     await channel.send(f"🎯 **라운드 {round_num} 시작!** (카드 {round_num}장)")
+    await channel.send(embed=EmbedBuilder.round_order(game))
 
     # ── 손패 확인용 공용 버튼 (채널, 눌러도 본인만 ephemeral로 확인) ──
     hand_view = HandCheckView(game, round_num)

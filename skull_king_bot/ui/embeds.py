@@ -20,6 +20,13 @@ COLOR_GAME_OVER = 0xE74C3C  # 빨간색
 COLOR_HAND = 0x1ABC9C       # 청록색
 
 
+def _turn_order_ids(game: Game) -> List[int]:
+    """현재 리드 플레이어부터 시작하는 이번 트릭의 진행 순서(플레이어 ID 목록)."""
+    lead_idx = game.player_order.index(game.lead_player_id)
+    n = len(game.player_order)
+    return [game.player_order[(lead_idx + i) % n] for i in range(n)]
+
+
 class EmbedBuilder:
     """게임 Embed 생성기"""
 
@@ -137,6 +144,30 @@ class EmbedBuilder:
         return embed
 
     # ════════════════════════════════════════════
+    #  순서 안내
+    # ════════════════════════════════════════════
+
+    @staticmethod
+    def round_order(game: Game) -> discord.Embed:
+        """라운드 시작 시 이번 라운드(첫 트릭) 진행 순서 안내 (채널)"""
+        embed = discord.Embed(
+            title=f"🔢 라운드 {game.current_round} - 진행 순서",
+            color=COLOR_PLAYING,
+        )
+        order_ids = _turn_order_ids(game)
+        lines = []
+        for i, pid in enumerate(order_ids, start=1):
+            p = game.players.get(pid)
+            name = p.name if p else "?"
+            if i == 1:
+                lines.append(f"👑 **{name}** (리드)")
+            else:
+                lines.append(f"`{i}.` {name}")
+        embed.description = "\n".join(lines)
+        embed.set_footer(text="👑 = 이번 트릭 리드 플레이어 | 이후 트릭은 승자가 리드합니다")
+        return embed
+
+    # ════════════════════════════════════════════
     #  트릭 진행
     # ════════════════════════════════════════════
 
@@ -151,6 +182,23 @@ class EmbedBuilder:
             color=COLOR_PLAYING,
         )
 
+        # 이번 트릭 진행 순서 (리드 플레이어부터)
+        order_ids = _turn_order_ids(game)
+        played_ids = {pc.player_id for pc in played_so_far}
+        current_id = game.current_turn_player.id
+        order_lines = []
+        for i, pid in enumerate(order_ids, start=1):
+            p = game.players.get(pid)
+            name = p.name if p else "?"
+            if pid in played_ids:
+                marker = "✅"
+            elif pid == current_id:
+                marker = "▶️"
+            else:
+                marker = "⏳"
+            order_lines.append(f"{marker} `{i}.` {name}")
+        embed.add_field(name="진행 순서", value="\n".join(order_lines), inline=False)
+
         # 이미 낸 카드
         if played_so_far:
             played_lines = "\n".join(
@@ -163,7 +211,7 @@ class EmbedBuilder:
         current = game.current_turn_player
         embed.add_field(
             name="현재 차례",
-            value=f"⏳ **{current.name}**님이 카드를 선택 중...",
+            value=f"▶️ **{current.name}**님이 카드를 선택 중...",
             inline=False,
         )
 
