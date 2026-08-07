@@ -8,7 +8,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
-from typing import Optional
+from typing import Dict, Optional
 
 import discord
 from discord import app_commands
@@ -47,6 +47,9 @@ intents.members = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 game_manager = GameManager()
+
+# 채널별 진행 중인 게임 루프 task (강제 종료용)
+_running_tasks: Dict[int, asyncio.Task] = {}
 
 
 # ================================================================
@@ -87,6 +90,38 @@ async def skull_king_command(interaction: discord.Interaction):
 
     # 로비 표시
     await _show_lobby(interaction, game)
+
+
+# ================================================================
+#  슬래시 커맨드: /스컬킹종료
+# ================================================================
+
+@bot.tree.command(name="스컬킹종료", description="진행 중인 스컬킹 게임을 강제 종료합니다 (호스트 전용)")
+async def skull_king_end_command(interaction: discord.Interaction):
+    """호스트가 진행 중인 게임을 즉시 강제 종료한다."""
+    channel_id = interaction.channel_id
+    game = game_manager.get_game(channel_id)
+
+    if not game or game.state == GameState.GAME_OVER:
+        await interaction.response.send_message(
+            "❌ 이 채널에 진행 중인 게임이 없습니다.", ephemeral=True
+        )
+        return
+
+    if interaction.user.id != game.host.id:
+        await interaction.response.send_message(
+            "❌ 호스트만 게임을 강제 종료할 수 있습니다.", ephemeral=True
+        )
+        return
+
+    task = _running_tasks.pop(channel_id, None)
+    if task and not task.done():
+        task.cancel()
+
+    game_manager.remove_game(channel_id)
+    await interaction.response.send_message(
+        f"🛑 **{interaction.user.display_name}**님이 게임을 강제 종료했습니다."
+    )
 
 
 # ================================================================
@@ -155,7 +190,8 @@ async def _show_lobby(interaction: discord.Interaction, game: Game):
             content="🏴‍☠️ **게임이 시작됩니다!**",
             embed=None, view=None,
         )
-        await _start_game(inter.channel, game)
+        task = asyncio.create_task(_start_game(inter.channel, game))
+        _running_tasks[game.channel_id] = task
 
     lobby_view = LobbyView(game, on_join, on_leave, on_start, on_add_ai, on_remove_ai)
     await interaction.edit_original_response(embed=embed, view=lobby_view)
@@ -198,27 +234,30 @@ async def _channel_gate(
 
 async def _start_game(channel: discord.abc.Messageable, game: Game):
     """게임을 시작하고 라운드를 순차 진행한다."""
-    for round_num in range(1, cfg.TOTAL_ROUNDS + 1):
-        await _run_round(channel, game)
+    try:
+        for round_num in range(1, cfg.TOTAL_ROUNDS + 1):
+            await _run_round(channel, game)
 
-        if game.is_game_over():
-            break
+            if game.is_game_over():
+                break
 
-        # 다음 라운드 진행 확인 (호스트만)
-        if round_num < cfg.TOTAL_ROUNDS:
-            next_view = NextRoundView()
-            next_msg = await channel.send(
-                f"▶️ **다음 라운드로 진행하려면 버튼을 누르세요!**",
-                view=next_view,
-            )
-            await next_view.wait()
-            try:
-                await next_msg.delete()
-            except discord.NotFound:
-                pass
+            # 다음 라운드 진행 확인 (호스트만)
+            if round_num < cfg.TOTAL_ROUNDS:
+                next_view = NextRoundView()
+                next_msg = await channel.send(
+                    f"▶️ **다음 라운드로 진행하려면 버튼을 누르세요!**",
+                    view=next_view,
+                )
+                await next_view.wait()
+                try:
+                    await next_msg.delete()
+                except discord.NotFound:
+                    pass
 
-    # 게임 종료
-    await _end_game(channel, game)
+        # 게임 종료
+        await _end_game(channel, game)
+    finally:
+        _running_tasks.pop(game.channel_id, None)
 
 
 async def _run_round(channel: discord.abc.Messageable, game: Game):
