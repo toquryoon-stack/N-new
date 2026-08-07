@@ -142,10 +142,10 @@ class LobbyView(View):
 # ════════════════════════════════════════════
 
 class BiddingView(View):
-    """비딩 선택 (DM으로 전송)"""
+    """비딩 선택 (채널 ephemeral)"""
 
-    def __init__(self, max_bid: int):
-        super().__init__(timeout=120)  # 2분
+    def __init__(self, max_bid: int, timeout: float = 60):
+        super().__init__(timeout=timeout)
         self.selected_bid: Optional[int] = None
 
         # 비딩 버튼 동적 생성 (0 ~ max_bid)
@@ -176,10 +176,10 @@ class BiddingView(View):
 # ════════════════════════════════════════════
 
 class CardSelectView(View):
-    """카드 선택 (DM으로 전송)"""
+    """카드 선택 (채널 ephemeral)"""
 
-    def __init__(self, hand: List[Card], valid_indices: List[int]):
-        super().__init__(timeout=120)
+    def __init__(self, hand: List[Card], valid_indices: List[int], timeout: float = 30):
+        super().__init__(timeout=timeout)
         self.selected_index: Optional[int] = None
 
         # 셀렉트 메뉴 생성

@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
+import time
 from typing import Dict, Optional
 
 import discord
@@ -211,12 +212,14 @@ async def _channel_gate(
 ) -> Optional[discord.Interaction]:
     """채널에 버튼 메시지를 올리고, 지정된 플레이어가 누를 때까지 기다린다.
 
-    클릭 즉시 그 인터랙션을 반환하므로, 호출부에서
+    메시지에는 디스코드 상대시각 타임스탬프(``<t:...:R>``)로 실시간 카운트다운이
+    표시된다. 클릭 즉시 그 인터랙션을 반환하므로, 호출부에서
     ``interaction.response.send_message(..., ephemeral=True)`` 로
     본인만 보이는 후속 UI를 띄우면 된다. 시간 초과 시 None.
     """
+    deadline_ts = int(time.time()) + timeout
     view = ActionGateView(player.id, label=label, style=style, timeout=timeout)
-    msg = await channel.send(text, view=view)
+    msg = await channel.send(f"{text}\n⏱️ 제한시간: <t:{deadline_ts}:R>", view=view)
     timed_out = await view.wait()
     try:
         if timed_out:
@@ -299,20 +302,23 @@ async def _run_round(channel: discord.abc.Messageable, game: Game):
 #  비딩 단계
 # ================================================================
 
-BID_PHASE_TIMEOUT = 150  # 채널 버튼 클릭 + 베팅 선택까지 포함한 전체 유예시간(초)
+BID_TIME_LIMIT = 60   # 베팅 제한시간(초)
+CARD_TIME_LIMIT = 30  # 카드 선택 제한시간(초)
 
 
 class _BidGateView(discord.ui.View):
     """비딩 단계 동안 채널에 떠 있는 공용 '베팅하기' 버튼.
 
     각 플레이어가 눌러야 본인만 보이는(ephemeral) 베팅 UI가 열린다.
+    베팅 단계 전체 마감(deadline_ts)은 모두에게 공통으로 적용된다.
     """
 
-    def __init__(self, game: Game, progress_msg: discord.Message, all_done: asyncio.Event):
-        super().__init__(timeout=BID_PHASE_TIMEOUT + 30)
+    def __init__(self, game: Game, progress_msg: discord.Message, all_done: asyncio.Event, deadline_ts: int):
+        super().__init__(timeout=max(1.0, deadline_ts - time.time()) + 5)
         self.game = game
         self.progress_msg = progress_msg
         self.all_done = all_done
+        self.deadline_ts = deadline_ts
 
     @discord.ui.button(label="🎲 베팅하기", style=discord.ButtonStyle.primary, custom_id="bid_gate")
     async def bid_button(self, interaction: discord.Interaction, btn: discord.ui.Button):
@@ -324,8 +330,9 @@ class _BidGateView(discord.ui.View):
             await interaction.response.send_message("✅ 이미 베팅을 완료했습니다!", ephemeral=True)
             return
 
-        bid_embed = EmbedBuilder.bidding_prompt(player, self.game.current_round)
-        bid_view = BiddingView(max_bid=self.game.current_round)
+        bid_embed = EmbedBuilder.bidding_prompt(player, self.game.current_round, deadline_ts=self.deadline_ts)
+        remaining = max(1.0, self.deadline_ts - time.time())
+        bid_view = BiddingView(max_bid=self.game.current_round, timeout=remaining)
         await interaction.response.send_message(embed=bid_embed, view=bid_view, ephemeral=True)
 
         timed_out = await bid_view.wait()
@@ -350,7 +357,8 @@ class _BidGateView(discord.ui.View):
 
 
 async def _bidding_phase(channel: discord.abc.Messageable, game: Game):
-    """모든 플레이어의 비딩을 채널에서 동시에 받는다."""
+    """모든 플레이어의 비딩을 채널에서 동시에 받는다 (전체 60초 제한)."""
+    deadline_ts = int(time.time()) + BID_TIME_LIMIT
     progress_msg = await channel.send(embed=EmbedBuilder.bidding_progress(game))
     all_done = asyncio.Event()
 
@@ -370,17 +378,19 @@ async def _bidding_phase(channel: discord.abc.Messageable, game: Game):
     gate_msg = None
     gate_view = None
     if game.human_count > 0:
-        gate_view = _BidGateView(game, progress_msg, all_done)
+        gate_view = _BidGateView(game, progress_msg, all_done, deadline_ts)
         gate_msg = await channel.send(
-            "🎲 아래 버튼을 눌러 각자 **본인 베팅**을 진행하세요! (나만 볼 수 있습니다)",
+            f"🎲 아래 버튼을 눌러 각자 **본인 베팅**을 진행하세요! (나만 볼 수 있습니다)\n"
+            f"⏱️ 제한시간: <t:{deadline_ts}:R>",
             view=gate_view,
         )
 
     if game.all_bids_in():
         all_done.set()
 
+    remaining = max(1.0, deadline_ts - time.time())
     try:
-        await asyncio.wait_for(all_done.wait(), timeout=BID_PHASE_TIMEOUT)
+        await asyncio.wait_for(all_done.wait(), timeout=remaining)
     except asyncio.TimeoutError:
         pass
 
@@ -478,11 +488,13 @@ async def _request_card(
         played = game.play_card(player.id, card_index)
         return played, None
 
-    # ── 사람 플레이어: 채널 버튼 → ephemeral 카드 선택 ──
+    # ── 사람 플레이어: 채널 버튼 → ephemeral 카드 선택 (전체 30초 제한, 클릭 지연 포함) ──
+    deadline_ts = int(time.time()) + CARD_TIME_LIMIT
     used_interaction = await _channel_gate(
         channel, player,
         f"🎴 {player.mention}님의 차례입니다! 아래 버튼으로 카드를 선택하세요.",
         label="🎴 카드 선택",
+        timeout=CARD_TIME_LIMIT,
     )
 
     if used_interaction is None:
@@ -495,9 +507,10 @@ async def _request_card(
         return played, None
 
     card_embed = EmbedBuilder.card_select_prompt(
-        player, valid_indices, game.current_round, game.current_trick
+        player, valid_indices, game.current_round, game.current_trick, deadline_ts=deadline_ts
     )
-    card_view = CardSelectView(player.hand, valid_indices)
+    remaining = max(1.0, deadline_ts - time.time())
+    card_view = CardSelectView(player.hand, valid_indices, timeout=remaining)
     await used_interaction.response.send_message(embed=card_embed, view=card_view, ephemeral=True)
 
     timed_out = await card_view.wait()

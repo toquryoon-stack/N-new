@@ -91,8 +91,12 @@ class EmbedBuilder:
     # ════════════════════════════════════════════
 
     @staticmethod
-    def bidding_prompt(player: Player, round_number: int) -> discord.Embed:
-        """비딩 안내 Embed (DM)"""
+    def bidding_prompt(
+        player: Player,
+        round_number: int,
+        deadline_ts: Optional[int] = None,
+    ) -> discord.Embed:
+        """비딩 안내 Embed"""
         cards_display = " | ".join(card.short_display for card in player.hand)
         embed = discord.Embed(
             title=f"📢 라운드 {round_number} - 비딩",
@@ -103,6 +107,9 @@ class EmbedBuilder:
             ),
             color=COLOR_BIDDING,
         )
+        if deadline_ts is not None:
+            embed.set_footer(text="⏱️ 제한시간 안에 선택하지 않으면 자동으로 0으로 베팅됩니다.")
+            embed.add_field(name="⏱️ 마감", value=f"<t:{deadline_ts}:R>", inline=False)
         return embed
 
     @staticmethod
@@ -229,8 +236,9 @@ class EmbedBuilder:
         valid_indices: List[int],
         round_number: int,
         trick_number: int,
+        deadline_ts: Optional[int] = None,
     ) -> discord.Embed:
-        """카드 선택 안내 (DM)"""
+        """카드 선택 안내"""
         embed = discord.Embed(
             title=f"🎴 라운드 {round_number} | 트릭 {trick_number} - 카드 선택",
             color=COLOR_PLAYING,
@@ -242,7 +250,9 @@ class EmbedBuilder:
             cards_display.append(f"{marker} `{i+1}.` {card.short_display}")
 
         embed.description = "\n".join(cards_display)
-        embed.set_footer(text="✅ 표시된 카드만 낼 수 있습니다")
+        if deadline_ts is not None:
+            embed.add_field(name="⏱️ 마감", value=f"<t:{deadline_ts}:R>", inline=False)
+        embed.set_footer(text="✅ 표시된 카드만 낼 수 있습니다 | 시간 초과 시 자동으로 첫 유효 카드가 나갑니다")
         return embed
 
     @staticmethod
