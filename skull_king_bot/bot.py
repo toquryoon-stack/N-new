@@ -51,6 +51,14 @@ game_manager = GameManager()
 
 # 채널별 진행 중인 게임 루프 task (강제 종료용)
 _running_tasks: Dict[int, asyncio.Task] = {}
+# 채널별로 파생된 백그라운드 task (예: 비딩 중 AI 동시 처리) - 메인 task 취소 시 함께 취소
+_child_tasks: Dict[int, set] = {}
+
+
+def _cancel_child_tasks(channel_id: int) -> None:
+    for t in _child_tasks.pop(channel_id, ()):
+        if not t.done():
+            t.cancel()
 
 
 # ================================================================
@@ -118,6 +126,7 @@ async def skull_king_end_command(interaction: discord.Interaction):
     task = _running_tasks.pop(channel_id, None)
     if task and not task.done():
         task.cancel()
+    _cancel_child_tasks(channel_id)  # 비딩 중이던 AI 등 파생 task도 함께 취소
 
     game_manager.remove_game(channel_id)
     await interaction.response.send_message(
@@ -261,6 +270,7 @@ async def _start_game(channel: discord.abc.Messageable, game: Game):
         await _end_game(channel, game)
     finally:
         _running_tasks.pop(game.channel_id, None)
+        _cancel_child_tasks(game.channel_id)
 
 
 async def _run_round(channel: discord.abc.Messageable, game: Game):
@@ -374,6 +384,7 @@ async def _bidding_phase(channel: discord.abc.Messageable, game: Game):
             all_done.set()
 
     ai_tasks = [asyncio.create_task(_ai_bid(p)) for p in game.player_list if p.is_ai]
+    _child_tasks.setdefault(game.channel_id, set()).update(ai_tasks)
 
     gate_msg = None
     gate_view = None
@@ -401,6 +412,7 @@ async def _bidding_phase(channel: discord.abc.Messageable, game: Game):
 
     if ai_tasks:
         await asyncio.gather(*ai_tasks, return_exceptions=True)
+    _child_tasks.get(game.channel_id, set()).difference_update(ai_tasks)
 
     if gate_view is not None:
         gate_view.stop()
