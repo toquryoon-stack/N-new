@@ -1,6 +1,7 @@
 """스컬킹 디스코드 봇 - 메인 엔트리포인트
 
-슬래시 커맨드로 게임을 생성하고, 디스코드 채널 + DM으로 게임을 진행한다.
+슬래시 커맨드로 게임을 생성하고, 채널 버튼 + ephemeral(나만 보임) 메시지로
+개인 정보(손패/베팅/카드 선택)를 처리하며 게임을 진행한다.
 """
 
 from __future__ import annotations
@@ -31,6 +32,8 @@ from ui.views import (
     RascalWagerView,
     GameOverView,
     NextRoundView,
+    ActionGateView,
+    HandCheckView,
 )
 
 # ── 로깅 설정 ──
@@ -159,6 +162,37 @@ async def _show_lobby(interaction: discord.Interaction, game: Game):
 
 
 # ================================================================
+#  채널 내 개인 입력 헬퍼 (DM 대체)
+# ================================================================
+
+async def _channel_gate(
+    channel: discord.abc.Messageable,
+    player,
+    text: str,
+    label: str = "▶️ 진행하기",
+    style: discord.ButtonStyle = discord.ButtonStyle.primary,
+    timeout: int = 120,
+) -> Optional[discord.Interaction]:
+    """채널에 버튼 메시지를 올리고, 지정된 플레이어가 누를 때까지 기다린다.
+
+    클릭 즉시 그 인터랙션을 반환하므로, 호출부에서
+    ``interaction.response.send_message(..., ephemeral=True)`` 로
+    본인만 보이는 후속 UI를 띄우면 된다. 시간 초과 시 None.
+    """
+    view = ActionGateView(player.id, label=label, style=style, timeout=timeout)
+    msg = await channel.send(text, view=view)
+    timed_out = await view.wait()
+    try:
+        if timed_out:
+            await msg.edit(content=f"⏰ {player.mention}님 시간 초과!", view=None)
+        else:
+            await msg.delete()
+    except discord.NotFound:
+        pass
+    return None if timed_out else view.interaction
+
+
+# ================================================================
 #  게임 시작 & 라운드 루프
 # ================================================================
 
@@ -194,18 +228,12 @@ async def _run_round(channel: discord.abc.Messageable, game: Game):
 
     await channel.send(f"🎯 **라운드 {round_num} 시작!** (카드 {round_num}장)")
 
-    # ── DM으로 손패 전달 (AI 제외) ──
-    for player in game.player_list:
-        if player.is_ai:
-            continue
-        try:
-            hand_embed = EmbedBuilder.hand(player, round_num)
-            await player.user.send(embed=hand_embed)
-        except discord.Forbidden:
-            await channel.send(
-                f"⚠️ {player.mention}님에게 DM을 보낼 수 없습니다! "
-                f"DM 설정을 확인해 주세요."
-            )
+    # ── 손패 확인용 공용 버튼 (채널, 눌러도 본인만 ephemeral로 확인) ──
+    hand_view = HandCheckView(game, round_num)
+    hand_msg = await channel.send(
+        "📋 아래 버튼을 눌러 언제든 **본인 손패**를 확인할 수 있습니다 (나만 보임).",
+        view=hand_view,
+    )
 
     # ── 비딩 단계 ──
     await _bidding_phase(channel, game)
@@ -213,6 +241,13 @@ async def _run_round(channel: discord.abc.Messageable, game: Game):
     # ── 트릭 진행 ──
     for trick_num in range(1, round_num + 1):
         await _play_trick(channel, game)
+
+    # ── 손패 확인 버튼 정리 ──
+    hand_view.stop()
+    try:
+        await hand_msg.delete()
+    except discord.NotFound:
+        pass
 
     # ── 라운드 종료 & 점수 ──
     scores = game.end_round()
@@ -224,31 +259,62 @@ async def _run_round(channel: discord.abc.Messageable, game: Game):
 #  비딩 단계
 # ================================================================
 
+BID_PHASE_TIMEOUT = 150  # 채널 버튼 클릭 + 베팅 선택까지 포함한 전체 유예시간(초)
+
+
+class _BidGateView(discord.ui.View):
+    """비딩 단계 동안 채널에 떠 있는 공용 '베팅하기' 버튼.
+
+    각 플레이어가 눌러야 본인만 보이는(ephemeral) 베팅 UI가 열린다.
+    """
+
+    def __init__(self, game: Game, progress_msg: discord.Message, all_done: asyncio.Event):
+        super().__init__(timeout=BID_PHASE_TIMEOUT + 30)
+        self.game = game
+        self.progress_msg = progress_msg
+        self.all_done = all_done
+
+    @discord.ui.button(label="🎲 베팅하기", style=discord.ButtonStyle.primary, custom_id="bid_gate")
+    async def bid_button(self, interaction: discord.Interaction, btn: discord.ui.Button):
+        player = self.game.players.get(interaction.user.id)
+        if not player or player.is_ai:
+            await interaction.response.send_message("❌ 이 게임의 참가자가 아닙니다.", ephemeral=True)
+            return
+        if player.bid is not None:
+            await interaction.response.send_message("✅ 이미 베팅을 완료했습니다!", ephemeral=True)
+            return
+
+        bid_embed = EmbedBuilder.bidding_prompt(player, self.game.current_round)
+        bid_view = BiddingView(max_bid=self.game.current_round)
+        await interaction.response.send_message(embed=bid_embed, view=bid_view, ephemeral=True)
+
+        timed_out = await bid_view.wait()
+        if timed_out or bid_view.selected_bid is None:
+            self.game.set_bid(player.id, 0)
+            try:
+                await interaction.followup.send(
+                    "⏰ 시간 초과! 자동으로 **0**으로 베팅되었습니다.", ephemeral=True
+                )
+            except discord.NotFound:
+                pass
+        else:
+            self.game.set_bid(player.id, bid_view.selected_bid)
+
+        try:
+            await self.progress_msg.edit(embed=EmbedBuilder.bidding_progress(self.game))
+        except discord.NotFound:
+            pass
+
+        if self.game.all_bids_in():
+            self.all_done.set()
+
+
 async def _bidding_phase(channel: discord.abc.Messageable, game: Game):
-    """모든 플레이어의 비딩을 동시에 받는다."""
+    """모든 플레이어의 비딩을 채널에서 동시에 받는다."""
     progress_msg = await channel.send(embed=EmbedBuilder.bidding_progress(game))
+    all_done = asyncio.Event()
 
-    # 각 플레이어에게 DM으로 비딩 요청 (동시 진행)
-    tasks = [
-        _request_bid(channel, game, player, progress_msg)
-        for player in game.player_list
-    ]
-    await asyncio.gather(*tasks)
-
-    # 비딩 결과 공개
-    await progress_msg.edit(embed=EmbedBuilder.bidding_result(game))
-
-
-async def _request_bid(
-    channel: discord.abc.Messageable,
-    game: Game,
-    player,
-    progress_msg: discord.Message,
-):
-    """한 플레이어에게 비딩을 요청한다 (DM 또는 AI 자동)."""
-
-    # ── AI 자동 비딩 ──
-    if player.is_ai:
+    async def _ai_bid(player):
         await asyncio.sleep(random.uniform(0.5, 1.5))  # 자연스러운 딜레이
         bid = AIStrategy.calculate_bid(player.hand, game.current_round, game.mode)
         game.set_bid(player.id, bid)
@@ -256,37 +322,46 @@ async def _request_bid(
             await progress_msg.edit(embed=EmbedBuilder.bidding_progress(game))
         except discord.NotFound:
             pass
-        return
+        if game.all_bids_in():
+            all_done.set()
 
-    # ── 사람 플레이어 DM 비딩 ──
+    ai_tasks = [asyncio.create_task(_ai_bid(p)) for p in game.player_list if p.is_ai]
+
+    gate_msg = None
+    gate_view = None
+    if game.human_count > 0:
+        gate_view = _BidGateView(game, progress_msg, all_done)
+        gate_msg = await channel.send(
+            "🎲 아래 버튼을 눌러 각자 **본인 베팅**을 진행하세요! (나만 볼 수 있습니다)",
+            view=gate_view,
+        )
+
+    if game.all_bids_in():
+        all_done.set()
+
     try:
-        bid_embed = EmbedBuilder.bidding_prompt(player, game.current_round)
-        bid_view = BiddingView(max_bid=game.current_round)
-        await player.user.send(embed=bid_embed, view=bid_view)
+        await asyncio.wait_for(all_done.wait(), timeout=BID_PHASE_TIMEOUT)
+    except asyncio.TimeoutError:
+        pass
 
-        timed_out = await bid_view.wait()
-
-        if timed_out or bid_view.selected_bid is None:
-            # 타임아웃 → 0으로 자동 비딩
+    # 시간 초과된 사람은 자동 0 베팅
+    for player in game.player_list:
+        if player.bid is None:
             game.set_bid(player.id, 0)
-            try:
-                await player.user.send("⏰ 시간 초과! 자동으로 **0**으로 비딩되었습니다.")
-            except discord.Forbidden:
-                pass
-        else:
-            game.set_bid(player.id, bid_view.selected_bid)
 
-        # 진행 상황 업데이트
+    if ai_tasks:
+        await asyncio.gather(*ai_tasks, return_exceptions=True)
+
+    if gate_view is not None:
+        gate_view.stop()
+    if gate_msg is not None:
         try:
-            await progress_msg.edit(embed=EmbedBuilder.bidding_progress(game))
+            await gate_msg.delete()
         except discord.NotFound:
             pass
 
-    except discord.Forbidden:
-        game.set_bid(player.id, 0)
-        await channel.send(
-            f"⚠️ {player.mention}님에게 DM을 보낼 수 없어 0으로 자동 비딩되었습니다."
-        )
+    # 비딩 결과 공개
+    await progress_msg.edit(embed=EmbedBuilder.bidding_result(game))
 
 
 # ================================================================
@@ -306,12 +381,12 @@ async def _play_trick(channel: discord.abc.Messageable, game: Game):
     while not game.is_trick_complete():
         player = game.current_turn_player
 
-        # DM으로 카드 선택 요청
-        played_card = await _request_card(channel, game, player)
+        # 채널 버튼 → 본인만 보이는 카드 선택 요청
+        played_card, used_interaction = await _request_card(channel, game, player)
 
         # 타이그리스 처리 (확장판)
         if played_card and played_card.card.card_type == CardType.TIGRESS:
-            await _handle_tigress(player, played_card)
+            await _handle_tigress(channel, player, played_card, used_interaction)
 
         # 채널 상태 업데이트
         try:
@@ -344,8 +419,8 @@ async def _request_card(
     channel: discord.abc.Messageable,
     game: Game,
     player,
-) -> Optional[PlayedCard]:
-    """한 플레이어에게 카드 선택을 요청한다 (DM 또는 AI 자동)."""
+) -> tuple[Optional[PlayedCard], Optional[discord.Interaction]]:
+    """한 플레이어에게 카드 선택을 요청한다 (채널 버튼 또는 AI 자동)."""
     valid_indices = game.get_valid_cards(player.id)
 
     # ── AI 자동 카드 선택 ──
@@ -361,44 +436,54 @@ async def _request_card(
             mode=game.mode,
         )
         played = game.play_card(player.id, card_index)
-        return played
+        return played, None
 
-    # ── 사람 플레이어 DM 카드 선택 ──
-    try:
-        card_embed = EmbedBuilder.card_select_prompt(
-            player, valid_indices, game.current_round, game.current_trick
-        )
-        card_view = CardSelectView(player.hand, valid_indices)
-        await player.user.send(embed=card_embed, view=card_view)
+    # ── 사람 플레이어: 채널 버튼 → ephemeral 카드 선택 ──
+    used_interaction = await _channel_gate(
+        channel, player,
+        f"🎴 {player.mention}님의 차례입니다! 아래 버튼으로 카드를 선택하세요.",
+        label="🎴 카드 선택",
+    )
 
-        timed_out = await card_view.wait()
-
-        if timed_out or card_view.selected_index is None:
-            # 타임아웃 → 첫 번째 유효 카드 자동 선택
-            auto_index = valid_indices[0] if valid_indices else 0
-            played = game.play_card(player.id, auto_index)
-            try:
-                await player.user.send(
-                    f"⏰ 시간 초과! 자동으로 {played.card.short_display}을(를) 냈습니다."
-                )
-            except discord.Forbidden:
-                pass
-            return played
-        else:
-            played = game.play_card(player.id, card_view.selected_index)
-            return played
-
-    except discord.Forbidden:
-        # DM 불가 → 자동 선택
+    if used_interaction is None:
+        # 시간 초과 → 첫 번째 유효 카드 자동 선택
         auto_index = valid_indices[0] if valid_indices else 0
         played = game.play_card(player.id, auto_index)
         await channel.send(
-            f"⚠️ {player.mention}님에게 DM을 보낼 수 없어 자동으로 카드를 냈습니다."
+            f"⏰ {player.mention}님 시간 초과! 자동으로 {played.card.short_display}을(를) 냈습니다."
         )
-        return played
+        return played, None
+
+    card_embed = EmbedBuilder.card_select_prompt(
+        player, valid_indices, game.current_round, game.current_trick
+    )
+    card_view = CardSelectView(player.hand, valid_indices)
+    await used_interaction.response.send_message(embed=card_embed, view=card_view, ephemeral=True)
+
+    timed_out = await card_view.wait()
+
+    if timed_out or card_view.selected_index is None:
+        # 타임아웃 → 첫 번째 유효 카드 자동 선택
+        auto_index = valid_indices[0] if valid_indices else 0
+        played = game.play_card(player.id, auto_index)
+        try:
+            await used_interaction.followup.send(
+                f"⏰ 시간 초과! 자동으로 {played.card.short_display}을(를) 냈습니다.", ephemeral=True
+            )
+        except discord.NotFound:
+            pass
+        return played, used_interaction
+    else:
+        played = game.play_card(player.id, card_view.selected_index)
+        return played, used_interaction
 
 
-async def _handle_tigress(player, played_card: PlayedCard):
+async def _handle_tigress(
+    channel: discord.abc.Messageable,
+    player,
+    played_card: PlayedCard,
+    used_interaction: Optional[discord.Interaction],
+):
     """타이그리스 카드 선택 처리"""
     # ── AI 자동 선택 ──
     if player.is_ai:
@@ -408,20 +493,34 @@ async def _handle_tigress(player, played_card: PlayedCard):
         played_card.card.tigress_choice = choice
         return
 
-    # ── 사람 플레이어 ──
-    try:
-        tigress_embed = EmbedBuilder.tigress_choice_prompt()
-        tigress_view = TigressChoiceView()
-        await player.user.send(embed=tigress_embed, view=tigress_view)
+    # ── 사람 플레이어: 카드 선택 때 쓴 interaction에 이어서 ephemeral로 진행 ──
+    tigress_embed = EmbedBuilder.tigress_choice_prompt()
+    tigress_view = TigressChoiceView()
+    sent = False
+    if used_interaction is not None:
+        try:
+            await used_interaction.followup.send(embed=tigress_embed, view=tigress_view, ephemeral=True)
+            sent = True
+        except discord.HTTPException:
+            sent = False
 
-        timed_out = await tigress_view.wait()
-        if timed_out or tigress_view.choice is None:
+    if not sent:
+        # 이어서 응답할 인터랙션이 없으면(타임아웃 등) 새 채널 게이트로 대체
+        gate_interaction = await _channel_gate(
+            channel, player,
+            f"🐯 {player.mention}님, 타이그리스 사용 방식을 선택하세요!",
+            label="🐯 선택하기",
+        )
+        if gate_interaction is None:
             played_card.card.tigress_choice = TigressChoice.ESCAPE
-            await player.user.send("⏰ 시간 초과! 자동으로 **탈출**로 사용됩니다.")
-        else:
-            played_card.card.tigress_choice = tigress_view.choice
-    except discord.Forbidden:
+            return
+        await gate_interaction.response.send_message(embed=tigress_embed, view=tigress_view, ephemeral=True)
+
+    timed_out = await tigress_view.wait()
+    if timed_out or tigress_view.choice is None:
         played_card.card.tigress_choice = TigressChoice.ESCAPE
+    else:
+        played_card.card.tigress_choice = tigress_view.choice
 
 
 # ================================================================
@@ -445,7 +544,7 @@ async def _handle_pirate_ability(
         elif pirate_name == PirateName.BAHIJ:
             await _handle_bahij(channel, game, winner)
         elif pirate_name == PirateName.JUANITA:
-            await _handle_juanita(game, winner)
+            await _handle_juanita(channel, game, winner)
         elif pirate_name == PirateName.HARRY:
             await _handle_harry(channel, game, winner)
         elif pirate_name == PirateName.RASCAL:
@@ -466,21 +565,26 @@ async def _handle_rosie(channel, game: Game, winner):
         await channel.send(f"☠️ 로지 능력: 🤖 {winner.name}이(가) **{target_name}**님을 리드로 지목!")
         return
 
-    # ── 사람 ──
+    # ── 사람: 채널 버튼 → ephemeral 선택 ──
+    inter = await _channel_gate(
+        channel, winner,
+        f"☠️ {winner.mention}님, **로지 들레이니** 능력! 다음 트릭의 리드 플레이어를 선택하세요.",
+        label="☠️ 로지 능력 사용",
+    )
+    if inter is None:
+        return
     view = RosieSelectView(game.player_list)
-    try:
-        await winner.user.send(
-            "☠️ **로지 들레이니** 능력! 다음 트릭의 리드 플레이어를 선택하세요:",
-            view=view,
-        )
-        await view.wait()
-        if view.result is not None:
-            game.set_rosie_lead(view.result)
-            target = game.players.get(view.result)
-            target_name = target.name if target else "?"
-            await channel.send(f"☠️ 로지 능력: **{target_name}**님이 다음 트릭을 리드합니다!")
-    except discord.Forbidden:
-        pass
+    await inter.response.send_message(
+        "☠️ **로지 들레이니** 능력! 다음 트릭의 리드 플레이어를 선택하세요:",
+        view=view,
+        ephemeral=True,
+    )
+    await view.wait()
+    if view.result is not None:
+        game.set_rosie_lead(view.result)
+        target = game.players.get(view.result)
+        target_name = target.name if target else "?"
+        await channel.send(f"☠️ 로지 능력: **{target_name}**님이 다음 트릭을 리드합니다!")
 
 
 async def _handle_bahij(channel, game: Game, winner):
@@ -496,41 +600,56 @@ async def _handle_bahij(channel, game: Game, winner):
         await channel.send(f"☠️ 바히즈 능력: 🤖 {winner.name}이(가) 카드를 교체했습니다!")
         return
 
-    # ── 사람 ──
+    # ── 사람: 채널 버튼 → ephemeral 선택 ──
     drawn_display = ", ".join(c.short_display for c in drawn)
-    try:
-        await winner.user.send(f"☠️ **바히즈** 능력! 드로우한 카드: {drawn_display}")
-
-        # 버릴 카드 선택
-        discard_view = BahijDiscardView(winner.hand)
-        await winner.user.send("버릴 카드 2장을 선택하세요:", view=discard_view)
-
-        timed_out = await discard_view.wait()
-        if timed_out or discard_view.result is None:
-            indices = [len(winner.hand) - 1, len(winner.hand) - 2]
-            game.bahij_discard(winner.id, indices)
-            await winner.user.send("⏰ 시간 초과! 자동으로 카드를 버렸습니다.")
-        else:
-            game.bahij_discard(winner.id, discard_view.result)
-
-        await channel.send(f"☠️ 바히즈 능력: **{winner.name}**님이 카드를 교체했습니다!")
-    except discord.Forbidden:
+    inter = await _channel_gate(
+        channel, winner,
+        f"☠️ {winner.mention}님, **바히즈** 능력! 카드 2장을 드로우했습니다.",
+        label="☠️ 바히즈 능력 사용",
+    )
+    if inter is None:
         indices = [len(winner.hand) - 1, len(winner.hand) - 2]
         game.bahij_discard(winner.id, indices)
+        await channel.send(f"☠️ 바히즈 능력: **{winner.name}**님이 카드를 교체했습니다! (시간 초과, 자동 처리)")
+        return
+
+    discard_view = BahijDiscardView(winner.hand)
+    await inter.response.send_message(
+        f"☠️ **바히즈** 능력! 드로우한 카드: {drawn_display}\n버릴 카드 2장을 선택하세요:",
+        view=discard_view,
+        ephemeral=True,
+    )
+
+    timed_out = await discard_view.wait()
+    if timed_out or discard_view.result is None:
+        indices = [len(winner.hand) - 1, len(winner.hand) - 2]
+        game.bahij_discard(winner.id, indices)
+        try:
+            await inter.followup.send("⏰ 시간 초과! 자동으로 카드를 버렸습니다.", ephemeral=True)
+        except discord.NotFound:
+            pass
+    else:
+        game.bahij_discard(winner.id, discard_view.result)
+
+    await channel.send(f"☠️ 바히즈 능력: **{winner.name}**님이 카드를 교체했습니다!")
 
 
-async def _handle_juanita(game: Game, winner):
+async def _handle_juanita(channel, game: Game, winner):
     """후아니타: 미사용 카드 확인"""
     # AI는 내부적으로 확인만 함 (표시 불필요)
     if winner.is_ai:
         return
 
+    inter = await _channel_gate(
+        channel, winner,
+        f"🔍 {winner.mention}님, **후아니타 제이드** 능력! 미사용 카드를 확인할 수 있습니다.",
+        label="🔍 후아니타 능력 사용",
+    )
+    if inter is None:
+        return
     remaining = game.get_remaining_cards_info()
     embed = EmbedBuilder.juanita_cards(remaining)
-    try:
-        await winner.user.send(embed=embed)
-    except discord.Forbidden:
-        pass
+    await inter.response.send_message(embed=embed, ephemeral=True)
 
 
 async def _handle_harry(channel, game: Game, winner):
@@ -545,20 +664,24 @@ async def _handle_harry(channel, game: Game, winner):
             await channel.send(f"☠️ 해리 능력: 🤖 {winner.name}이(가) 비딩을 변경했습니다!")
         return
 
-    # ── 사람 ──
+    # ── 사람: 채널 버튼 → ephemeral 선택 ──
+    inter = await _channel_gate(
+        channel, winner,
+        f"☠️ {winner.mention}님, **해리 더 자이언트** 능력! 비딩을 ±1 변경할 수 있습니다.",
+        label="☠️ 해리 능력 사용",
+    )
+    if inter is None:
+        return
     view = HarryBidView(current_bid, game.current_round)
-    try:
-        await winner.user.send(
-            f"☠️ **해리** 능력! 현재 비딩: **{current_bid}** | 변경하시겠습니까?",
-            view=view,
-        )
-        await view.wait()
-        if view.result is not None and view.result != 0:
-            game.modify_bid(winner.id, view.result)
-            new_bid = current_bid + view.result
-            await channel.send(f"☠️ 해리 능력: **{winner.name}**님이 비딩을 변경했습니다!")
-    except discord.Forbidden:
-        pass
+    await inter.response.send_message(
+        f"☠️ **해리** 능력! 현재 비딩: **{current_bid}** | 변경하시겠습니까?",
+        view=view,
+        ephemeral=True,
+    )
+    await view.wait()
+    if view.result is not None and view.result != 0:
+        game.modify_bid(winner.id, view.result)
+        await channel.send(f"☠️ 해리 능력: **{winner.name}**님이 비딩을 변경했습니다!")
 
 
 async def _handle_rascal(channel, game: Game, winner):
@@ -573,21 +696,26 @@ async def _handle_rascal(channel, game: Game, winner):
         await channel.send(f"☠️ 라스칼 능력: 🤖 {winner.name}이(가) **{wager}점** 추가 베팅!")
         return
 
-    # ── 사람 ──
+    # ── 사람: 채널 버튼 → ephemeral 선택 ──
+    inter = await _channel_gate(
+        channel, winner,
+        f"☠️ {winner.mention}님, **라스칼 오브 랫츠** 능력! 추가 베팅을 선택하세요.",
+        label="☠️ 라스칼 능력 사용",
+    )
+    if inter is None:
+        return
     view = RascalWagerView()
-    try:
-        await winner.user.send(
-            "☠️ **라스칼** 능력! 추가 베팅을 선택하세요:",
-            view=view,
+    await inter.response.send_message(
+        "☠️ **라스칼** 능력! 추가 베팅을 선택하세요:",
+        view=view,
+        ephemeral=True,
+    )
+    await view.wait()
+    if view.result is not None:
+        game.set_rascal_wager(winner.id, view.result)
+        await channel.send(
+            f"☠️ 라스칼 능력: **{winner.name}**님이 **{view.result}점** 추가 베팅!"
         )
-        await view.wait()
-        if view.result is not None:
-            game.set_rascal_wager(winner.id, view.result)
-            await channel.send(
-                f"☠️ 라스칼 능력: **{winner.name}**님이 **{view.result}점** 추가 베팅!"
-            )
-    except discord.Forbidden:
-        pass
 
 
 # ================================================================

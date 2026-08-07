@@ -16,6 +16,67 @@ from game.enums import GameMode, TigressChoice, PirateName
 
 
 # ════════════════════════════════════════════
+#  채널 내 개인 입력 게이트 (DM 대체)
+# ════════════════════════════════════════════
+
+class ActionGateView(View):
+    """지정된 유저만 누를 수 있는 버튼.
+
+    채널에 공개로 뜨지만, 클릭한 사람의 인터랙션만 받아서
+    이후 ephemeral(본인만 보임) 메시지를 여는 용도로 쓴다.
+    """
+
+    def __init__(
+        self,
+        allowed_user_id: int,
+        label: str = "▶️ 진행하기",
+        style: discord.ButtonStyle = discord.ButtonStyle.primary,
+        timeout: int = 120,
+    ):
+        super().__init__(timeout=timeout)
+        self.allowed_user_id = allowed_user_id
+        self.interaction: Optional[discord.Interaction] = None
+
+        btn = Button(label=label, style=style, custom_id="action_gate")
+        btn.callback = self._on_click
+        self.add_item(btn)
+
+    async def _on_click(self, interaction: discord.Interaction):
+        if interaction.user.id != self.allowed_user_id:
+            await interaction.response.send_message(
+                "❌ 본인 차례/입력에만 사용할 수 있습니다!", ephemeral=True
+            )
+            return
+        self.interaction = interaction
+        self.stop()
+
+
+class HandCheckView(View):
+    """라운드 내내 채널에 고정으로 떠 있는 '내 손패 보기' 공용 버튼.
+
+    누구든 눌러도 자신의 손패만 ephemeral로 확인할 수 있다.
+    """
+
+    def __init__(self, game: Game, round_number: int):
+        super().__init__(timeout=None)
+        self.game = game
+        self.round_number = round_number
+
+    @button(label="📋 내 손패 보기", style=discord.ButtonStyle.secondary, custom_id="check_hand")
+    async def check_hand(self, interaction: discord.Interaction, btn: Button):
+        from ui.embeds import EmbedBuilder  # 순환 임포트 방지
+
+        player = self.game.players.get(interaction.user.id)
+        if not player or player.is_ai:
+            await interaction.response.send_message(
+                "❌ 이 게임의 참가자가 아닙니다.", ephemeral=True
+            )
+            return
+        embed = EmbedBuilder.hand(player, self.round_number)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+# ════════════════════════════════════════════
 #  모드 선택
 # ════════════════════════════════════════════
 
