@@ -218,6 +218,30 @@ class EmbedBuilder:
 
         return embed
 
+    # ================================================================
+    #  고발자 확인 (본인에게만 보이는 응답)
+    # ================================================================
+
+    @staticmethod
+    def accuser_peek(viewed: List[Tuple[int, Tile]], game: Game) -> discord.Embed:
+        """발견자 이후의 고발자가, 고발 전 확인하는 용의자 2명
+        (직전에 고발된 용의자를 제외한 나머지)"""
+        embed = discord.Embed(
+            title="🔍 용의자 확인",
+            description="직전에 고발된 용의자를 제외한 나머지 2명입니다.",
+            color=COLOR_DISCOVER,
+        )
+
+        for idx, tile in viewed:
+            embed.add_field(
+                name=f"용의자 {idx + 1}",
+                value=f"{tile.emoji} **{tile.name}**",
+                inline=True,
+            )
+
+        embed.set_footer(text="이 정보로 고발할 용의자를 정하세요!")
+        return embed
+
     @staticmethod
     def swap_result_dm(swapped: bool, game: Game) -> discord.Embed:
         """교체 결과 (본인에게만 보임)"""
@@ -246,7 +270,9 @@ class EmbedBuilder:
             title="⚖️ 고발 단계",
             description=(
                 "발견자부터 시계방향으로 용의자를 고발합니다.\n"
-                "범인이라고 생각하는 용의자에게 수사 칩을 올려주세요!"
+                "발견자 다음부터는, 직전에 고발된 용의자를 제외한 나머지 2명을\n"
+                "확인한 뒤 고발합니다. 범인이라고 생각하는 용의자에게 "
+                "수사 칩을 올려주세요!"
             ),
             color=COLOR_ACCUSE,
         )
@@ -562,8 +588,9 @@ class EmbedBuilder:
             value=(
                 "1️⃣ 타일 1장을 받고 확인\n"
                 "2️⃣ 오른쪽에 전달, 왼쪽에서 받음\n"
-                "3️⃣ 발견자가 용의자 2명 확인 (+ 교체 가능)\n"
-                "4️⃣ 발견자부터 시계방향으로 고발\n"
+                "3️⃣ 발견자가 용의자 2명 확인 (+ 교체 가능) 후 첫 고발\n"
+                "4️⃣ 그 다음부터는, 직전에 고발된 용의자를 제외한 나머지\n"
+                "　　2명을 확인한 뒤 시계방향으로 순서대로 고발\n"
                 "5️⃣ 용의자 공개 & 판정"
             ),
             inline=False,

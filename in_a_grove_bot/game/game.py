@@ -38,6 +38,7 @@ class Game:
         # suspect_idx -> [player_ids] (고발 순서, 마지막=맨 위)
         self.accusation_order: List[int] = []  # 고발 순서 (player_ids)
         self.current_accuser_idx: int = 0  # 현재 고발자 인덱스 (player_order 기준)
+        self.last_accused_idx: Optional[int] = None  # 직전에 고발된 용의자 인덱스
 
         # ── 2인용 고스트 ──
         self.ghost_tile: Optional[Tile] = None
@@ -117,6 +118,7 @@ class Game:
         # 고발 초기화
         self.accusation_stacks = {0: [], 1: [], 2: []}
         self.accusation_order = []
+        self.last_accused_idx = None
 
         # 타일 배분
         effective_count = max(self.player_count, 3)  # 2인용은 3인용으로
@@ -199,6 +201,22 @@ class Game:
     def current_accuser(self) -> Player:
         return self.players[self.player_order[self.current_accuser_idx]]
 
+    def view_suspects_for_next_accuser(self) -> List[Tuple[int, Tile]]:
+        """직전에 고발된 용의자를 제외한 나머지 2명을 현재 고발자가 확인한다.
+
+        원작 규칙: 발견자(첫 고발자) 이후의 모든 고발자는, 자신의 차례에
+        고발하기 전 "바로 직전에 고발된 용의자"를 제외한 나머지 2명의
+        번호를 확인해야 한다.
+        """
+        if self.last_accused_idx is None:
+            indices = [0, 1, 2]
+        else:
+            indices = [i for i in range(3) if i != self.last_accused_idx]
+
+        accuser = self.current_accuser
+        accuser.known_suspect_indices = list(indices)
+        return [(i, self.suspects[i]) for i in indices]
+
     def make_accusation(self, player_id: int, suspect_idx: int) -> bool:
         """플레이어가 용의자를 고발한다."""
         if suspect_idx < 0 or suspect_idx >= 3:
@@ -210,6 +228,7 @@ class Game:
         player.accusation = suspect_idx
         self.accusation_stacks[suspect_idx].append(player_id)
         self.accusation_order.append(player_id)
+        self.last_accused_idx = suspect_idx
         return True
 
     def advance_accuser(self) -> bool:

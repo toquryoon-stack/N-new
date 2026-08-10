@@ -312,6 +312,41 @@ class DiscovererStartView(View):
 
 
 # ================================================================
+#  고발자 확인 뷰 (발견자 이후의 모든 고발자가, 고발 전 필수로 확인)
+# ================================================================
+
+class SuspectPeekView(View):
+    """직전에 고발된 용의자를 제외한 나머지 2명을, 채널 버튼을 눌러
+    본인에게만 보이게 확인한다."""
+
+    def __init__(self, game: Game, accuser_id: int, timeout: float = 60):
+        super().__init__(timeout=timeout)
+        self.game = game
+        self.accuser_id = accuser_id
+        self.done = False
+
+    @button(label="남은 용의자 확인", style=discord.ButtonStyle.blurple, emoji="🔍")
+    async def peek_button(self, interaction: discord.Interaction, btn: Button):
+        if interaction.user.id != self.accuser_id:
+            await interaction.response.send_message(
+                "지금은 당신의 차례가 아닙니다!", ephemeral=True
+            )
+            return
+
+        viewed = self.game.view_suspects_for_next_accuser()
+
+        from .embeds import EmbedBuilder
+        embed = EmbedBuilder.accuser_peek(viewed, self.game)
+
+        btn.disabled = True
+        await interaction.message.edit(view=self)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+        self.done = True
+        self.stop()
+
+
+# ================================================================
 #  고발 뷰
 # ================================================================
 

@@ -17,6 +17,7 @@ from ui.views import (
     LobbyView,
     TileCheckView,
     DiscovererStartView,
+    SuspectPeekView,
     AccusationView,
     NextRoundView,
     GameOverView,
@@ -258,12 +259,35 @@ async def accusation_phase(channel: discord.TextChannel, game: Game):
     embed = EmbedBuilder.accusation_phase(game)
     await channel.send(embed=embed)
 
+    is_first_accuser = True  # 발견자(첫 고발자)는 이미 수사 단계에서 2명을 확인했음
+
     while not game.all_accused():
         accuser = game.current_accuser
 
+        # 발견자 이후의 모든 고발자는, 고발 전 직전에 고발된 용의자를
+        # 제외한 나머지 2명을 반드시 확인해야 한다 (원작 규칙).
+        if not is_first_accuser:
+            if accuser.is_ai:
+                game.view_suspects_for_next_accuser()
+                await asyncio.sleep(AI_DELAY)
+            else:
+                peek_view = SuspectPeekView(game, accuser.id, timeout=60)
+                await channel.send(
+                    f"🔍 {accuser.color_emoji} **{accuser.name}**님, 아래 버튼을 눌러 "
+                    "남은 용의자 2명을 확인하세요! (본인만 볼 수 있습니다)",
+                    view=peek_view,
+                )
+                timed_out = await peek_view.wait()
+                if timed_out or not peek_view.done:
+                    # 확인을 안 했어도 game 쪽에는 최신 정보가 없으므로
+                    # AI 로직과 동일하게 정보 없이 진행한다.
+                    await channel.send(
+                        f"⏰ {accuser.name} 확인 시간 초과! 정보 없이 고발을 진행합니다."
+                    )
+                    accuser.known_suspect_indices = []
+
         if accuser.is_ai:
             # ── AI 고발 ──
-            await asyncio.sleep(AI_DELAY)
             suspects_info = _get_ai_suspect_info(game, accuser)
             chosen_idx = AIStrategy.choose_accusation(
                 player=accuser,
@@ -301,6 +325,8 @@ async def accusation_phase(channel: discord.TextChannel, game: Game):
                     f"**용의자 {chosen_idx + 1}**을(를) 고발했습니다!"
                 )
 
+        is_first_accuser = False
+
         # 다음 고발자
         if not game.advance_accuser():
             break
@@ -311,19 +337,11 @@ async def accusation_phase(channel: discord.TextChannel, game: Game):
 
 
 def _get_ai_suspect_info(game: Game, ai_player) -> list:
-    """AI가 알고 있는 용의자 정보를 구성한다.
-
-    - 발견자 AI: 확인한 용의자를 알고 있음
-    - 비발견자 AI: 용의자를 모름 (None)
-    """
+    """AI가 알고 있는 용의자 정보를 구성한다 (확인한 용의자만 채워짐)."""
     suspects_info = [None, None, None]
-
-    # 발견자라면 확인한 용의자 정보 제공
-    if ai_player == game.discoverer:
-        for idx in ai_player.known_suspect_indices:
-            if 0 <= idx < 3:
-                suspects_info[idx] = game.suspects[idx]
-
+    for idx in ai_player.known_suspect_indices:
+        if 0 <= idx < 3:
+            suspects_info[idx] = game.suspects[idx]
     return suspects_info
 
 
