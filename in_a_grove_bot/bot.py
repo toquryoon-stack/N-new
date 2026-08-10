@@ -195,8 +195,9 @@ async def discoverer_phase(channel: discord.TextChannel, game: Game):
         chosen = AIStrategy.choose_suspects_to_view()
         viewed = game.set_discoverer_viewed(chosen)
 
+        chosen_text = ", ".join(f"{i + 1}번" for i in sorted(chosen))
         await channel.send(
-            f"🤖 {discoverer.name}이(가) 용의자 2명을 확인했습니다."
+            f"🤖 {discoverer.name}이(가) 용의자 {chosen_text}을(를) 확인했습니다."
         )
 
         # AI 교체 결정
@@ -228,22 +229,26 @@ async def discoverer_phase(channel: discord.TextChannel, game: Game):
 
         timed_out = await start_view.wait()
         if timed_out or not start_view.done:
-            await channel.send(
-                f"⏰ {discoverer.name} 시간 초과! 자동으로 수사합니다."
-            )
             chosen = AIStrategy.choose_suspects_to_view()
             game.set_discoverer_viewed(chosen)
+            chosen_text = ", ".join(f"{i + 1}번" for i in sorted(chosen))
             await channel.send(
-                f"🔍 {discoverer.name}이(가) 용의자 2명을 확인했습니다. (자동)"
-            )
-        elif start_view.swapped:
-            await channel.send(
-                f"🔄 {discoverer.color_emoji} {discoverer.name}이(가) 용의자와 피해자를 교체했습니다!"
+                f"⏰ {discoverer.name} 시간 초과! 자동으로 용의자 {chosen_text}을(를) 확인했습니다."
             )
         else:
+            chosen_text = ", ".join(f"{i + 1}번" for i in sorted(start_view.chosen_indices))
             await channel.send(
-                f"⏭️ {discoverer.color_emoji} {discoverer.name}이(가) 교체 없이 넘어갑니다."
+                f"🔍 {discoverer.color_emoji} {discoverer.name}이(가) "
+                f"용의자 {chosen_text}을(를) 확인했습니다."
             )
+            if start_view.swapped:
+                await channel.send(
+                    f"🔄 {discoverer.color_emoji} {discoverer.name}이(가) 용의자와 피해자를 교체했습니다!"
+                )
+            else:
+                await channel.send(
+                    f"⏭️ {discoverer.color_emoji} {discoverer.name}이(가) 교체 없이 넘어갑니다."
+                )
 
     game.state = GameState.DISCOVERING
 
