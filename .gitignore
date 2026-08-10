@@ -1,2 +1,5 @@
 node_modules/
 discord-config.json
+__pycache__/
+*.pyc
+in_a_grove_bot/.env
