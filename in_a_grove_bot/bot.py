@@ -100,39 +100,35 @@ async def run_game(channel: discord.TextChannel, game: Game):
             await channel.send(embed=embed)
             await asyncio.sleep(1)
 
-            # ── 2) 타일 확인 안내 (채널 버튼, 본인에게만 보임) ──
-            await send_tile_check_prompt(channel, game, phase="original")
-            await asyncio.sleep(1)
-
-            # ── 3) 타일 전달 ──
+            # ── 2) 타일 전달 ──
             game.pass_tiles()
             await channel.send("🔄 타일이 오른쪽 플레이어에게 전달되었습니다!")
             await asyncio.sleep(0.5)
 
-            # ── 4) 전달 후 타일 확인 안내 ──
-            await send_tile_check_prompt(channel, game, phase="passed")
+            # ── 3) 타일 확인 안내 (원래 타일 + 전달받은 타일을 한 메시지로) ──
+            await send_tile_check_prompt(channel, game)
             await asyncio.sleep(1)
 
-            # ── 5) 발견자 수사 ──
+            # ── 4) 발견자 수사 ──
             await discoverer_phase(channel, game)
             await asyncio.sleep(1)
 
-            # ── 6) 고발 단계 ──
+            # ── 5) 고발 단계 ──
             await accusation_phase(channel, game)
             await asyncio.sleep(1)
 
-            # ── 7) 공개 & 판정 ──
+            # ── 6) 공개 & 판정 ──
             result = game.reveal_and_judge()
             embed = EmbedBuilder.reveal_suspects(game, result)
             await channel.send(embed=embed)
             await asyncio.sleep(2)
 
-            # ── 8) 결과 적용 ──
+            # ── 7) 결과 적용 ──
             player_results = game.apply_results(result)
             embed = EmbedBuilder.round_results(game, result, player_results)
             await channel.send(embed=embed)
 
-            # ── 9) 게임 종료 체크 ──
+            # ── 8) 게임 종료 체크 ──
             over_info = game.check_game_over()
             if over_info:
                 game.state = GameState.GAME_OVER
@@ -142,7 +138,7 @@ async def run_game(channel: discord.TextChannel, game: Game):
                 manager.remove_game(channel.id)
                 return
 
-            # ── 10) 다음 라운드 대기 ──
+            # ── 9) 다음 라운드 대기 ──
             next_view = NextRoundView(host_id=game.host.id)
             await channel.send(
                 "▶️ 다음 라운드를 시작하려면 호스트가 버튼을 눌러주세요!",
@@ -166,17 +162,18 @@ async def run_game(channel: discord.TextChannel, game: Game):
 #  타일 확인 (채널 버튼, 본인에게만 보이는 응답)
 # ================================================================
 
-async def send_tile_check_prompt(channel: discord.TextChannel, game: Game, phase: str):
-    """채널에 타일 확인 버튼을 올린다. 사람 플레이어가 없으면 생략한다."""
+async def send_tile_check_prompt(channel: discord.TextChannel, game: Game):
+    """채널에 타일 확인 버튼을 올린다. 원래 받은 타일과 전달받은 타일을
+    한 메시지(본인에게만 보이는 응답)로 함께 보여준다. 사람 플레이어가
+    없으면 생략한다."""
     if not any(not p.is_ai for p in game.player_list):
         return
 
-    view = TileCheckView(game, phase=phase)
-    if phase == "passed":
-        text = "🔄 아래 버튼을 눌러 본인만 볼 수 있는 새 타일 정보를 확인하세요!"
-    else:
-        text = "🃏 아래 버튼을 눌러 본인만 볼 수 있는 타일 정보를 확인하세요!"
-    await channel.send(text, view=view)
+    view = TileCheckView(game)
+    await channel.send(
+        "🃏 아래 버튼을 눌러 본인만 볼 수 있는 타일 정보를 확인하세요!",
+        view=view,
+    )
 
 
 # ================================================================

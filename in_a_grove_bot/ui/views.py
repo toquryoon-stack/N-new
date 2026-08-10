@@ -208,12 +208,12 @@ class SwapVictimView(View):
 # ================================================================
 
 class TileCheckView(View):
-    """채널의 버튼을 눌러 본인 타일 정보를 확인 (ephemeral)"""
+    """채널의 버튼을 눌러, 원래 받은 타일과 전달받은 타일을 한 메시지로
+    본인에게만 보이게 확인 (ephemeral)"""
 
-    def __init__(self, game: Game, phase: str, timeout: float = 600):
+    def __init__(self, game: Game, timeout: float = 600):
         super().__init__(timeout=timeout)
         self.game = game
-        self.phase = phase  # "original" | "passed"
 
     @button(label="내 타일 확인", style=discord.ButtonStyle.blurple, emoji="🃏")
     async def check_button(self, interaction: discord.Interaction, btn: Button):
@@ -225,11 +225,7 @@ class TileCheckView(View):
             return
 
         from .embeds import EmbedBuilder
-        if self.phase == "passed":
-            embed = EmbedBuilder.passed_tile_dm(player, self.game)
-        else:
-            embed = EmbedBuilder.tile_dm(player, self.game)
-
+        embed = EmbedBuilder.my_tiles(player, self.game)
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
 

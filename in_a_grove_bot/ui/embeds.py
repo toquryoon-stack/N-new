@@ -120,29 +120,10 @@ class EmbedBuilder:
     # ================================================================
 
     @staticmethod
-    def tile_dm(player: Player, game: Game) -> discord.Embed:
-        """본인에게만 보이는 타일 정보"""
+    def my_tiles(player: Player, game: Game) -> discord.Embed:
+        """원래 받은 타일과 전달받은 타일을 한 메시지로, 본인에게만 보이게"""
         embed = discord.Embed(
-            title=f"🃏 라운드 {game.current_round} - 당신의 타일",
-            color=COLOR_TILE,
-        )
-
-        tile = player.original_tile
-        if tile:
-            embed.add_field(
-                name="받은 타일",
-                value=f"{tile.emoji} **{tile.name}**",
-                inline=True,
-            )
-
-        embed.set_footer(text="이 타일은 곧 오른쪽 플레이어에게 전달됩니다.")
-        return embed
-
-    @staticmethod
-    def passed_tile_dm(player: Player, game: Game) -> discord.Embed:
-        """타일 전달 후, 본인에게만 보이는 정보"""
-        embed = discord.Embed(
-            title=f"🔄 라운드 {game.current_round} - 받은 타일",
+            title=f"🃏 라운드 {game.current_round} - 내 타일 정보",
             color=COLOR_TILE,
         )
 
