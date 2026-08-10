@@ -380,14 +380,6 @@ class Game:
                     "reason": f"{p.name}의 수사 칩이 모두 소진되었습니다!",
                     "winner_id": winner.id if winner else None,
                 }
-            # 총 칩 8개 이상 → 패배
-            if p.total_chips >= cfg.LOSE_CHIP_THRESHOLD:
-                winner = self._find_winner(exclude_id=p.id)
-                return {
-                    "loser_id": p.id,
-                    "reason": f"{p.name}의 총 칩이 {p.total_chips}개 (≥{cfg.LOSE_CHIP_THRESHOLD})입니다!",
-                    "winner_id": winner.id if winner else None,
-                }
 
         # 최대 라운드 도달
         if self.current_round >= cfg.MAX_ROUNDS:
