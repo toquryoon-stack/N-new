@@ -204,6 +204,118 @@ class SwapVictimView(View):
 
 
 # ================================================================
+#  타일 확인 뷰 (채널에서 버튼으로, 본인에게만 보이는 응답)
+# ================================================================
+
+class TileCheckView(View):
+    """채널의 버튼을 눌러 본인 타일 정보를 확인 (ephemeral)"""
+
+    def __init__(self, game: Game, phase: str, timeout: float = 600):
+        super().__init__(timeout=timeout)
+        self.game = game
+        self.phase = phase  # "original" | "passed"
+
+    @button(label="내 타일 확인", style=discord.ButtonStyle.blurple, emoji="🃏")
+    async def check_button(self, interaction: discord.Interaction, btn: Button):
+        player = self.game.players.get(interaction.user.id)
+        if not player or player.is_ai:
+            await interaction.response.send_message(
+                "이 게임에 참가하지 않았습니다!", ephemeral=True
+            )
+            return
+
+        from .embeds import EmbedBuilder
+        if self.phase == "passed":
+            embed = EmbedBuilder.passed_tile_dm(player, self.game)
+        else:
+            embed = EmbedBuilder.tile_dm(player, self.game)
+
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+# ================================================================
+#  발견자 수사 뷰 (채널에서 시작 → 본인에게만 보이는 응답으로 진행)
+# ================================================================
+
+class DiscovererStartView(View):
+    """발견자가 채널 버튼으로 수사를 시작하고, 이후 본인만 보이는
+    응답(ephemeral)으로 용의자 확인 및 교체 여부를 결정한다."""
+
+    def __init__(self, game: Game, discoverer_id: int, timeout: float = 150):
+        super().__init__(timeout=timeout)
+        self.game = game
+        self.discoverer_id = discoverer_id
+        self.done = False
+        self.chosen_indices: List[int] = []
+        self.swapped = False
+
+    @button(label="수사 시작", style=discord.ButtonStyle.blurple, emoji="🔍")
+    async def start_button(self, interaction: discord.Interaction, btn: Button):
+        if interaction.user.id != self.discoverer_id:
+            await interaction.response.send_message(
+                "발견자만 수사를 시작할 수 있습니다!", ephemeral=True
+            )
+            return
+
+        btn.disabled = True
+        await interaction.message.edit(view=self)
+
+        from .embeds import EmbedBuilder
+        discoverer = self.game.players[self.discoverer_id]
+
+        # 1) 용의자 2명 선택 (본인에게만 보임)
+        select_view = SuspectSelectView(timeout=60)
+        await interaction.response.send_message(
+            "🔍 **발견자 수사** - 확인할 용의자 2명을 선택하세요:",
+            view=select_view,
+            ephemeral=True,
+        )
+
+        timed_out = await select_view.wait()
+        if timed_out or not select_view.done:
+            chosen = [0, 1]
+            await interaction.followup.send(
+                "⏰ 시간 초과! 자동으로 용의자 1, 2를 선택합니다.", ephemeral=True
+            )
+        else:
+            chosen = select_view.selected_indices
+        self.chosen_indices = chosen
+
+        viewed = self.game.set_discoverer_viewed(chosen)
+
+        # 결과 확인 (본인에게만 보임)
+        embed = EmbedBuilder.discoverer_view_dm(discoverer, viewed, self.game)
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
+        # 2) 교체 여부 (본인에게만 보임)
+        swap_view = SwapVictimView(viewed_indices=chosen, timeout=60)
+        await interaction.followup.send(
+            "🔄 용의자와 피해자를 교체하시겠습니까?",
+            view=swap_view,
+            ephemeral=True,
+        )
+
+        timed_out = await swap_view.wait()
+        if timed_out or not swap_view.done:
+            await interaction.followup.send("⏰ 시간 초과! 교체 없이 넘어갑니다.", ephemeral=True)
+            swap_idx = None
+        else:
+            swap_idx = swap_view.swap_idx
+
+        if swap_idx is not None:
+            self.game.swap_victim(swap_idx)
+            self.swapped = True
+            embed = EmbedBuilder.swap_result_dm(True, self.game)
+        else:
+            self.swapped = False
+            embed = EmbedBuilder.swap_result_dm(False, self.game)
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
+        self.done = True
+        self.stop()
+
+
+# ================================================================
 #  고발 뷰
 # ================================================================
 

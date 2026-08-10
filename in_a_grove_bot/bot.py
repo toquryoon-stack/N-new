@@ -15,8 +15,8 @@ from game.enums import GameState
 from ui.embeds import EmbedBuilder
 from ui.views import (
     LobbyView,
-    SuspectSelectView,
-    SwapVictimView,
+    TileCheckView,
+    DiscovererStartView,
     AccusationView,
     NextRoundView,
     GameOverView,
@@ -100,8 +100,8 @@ async def run_game(channel: discord.TextChannel, game: Game):
             await channel.send(embed=embed)
             await asyncio.sleep(1)
 
-            # ── 2) 타일 DM 전송 ──
-            await send_tile_dms(channel, game)
+            # ── 2) 타일 확인 안내 (채널 버튼, 본인에게만 보임) ──
+            await send_tile_check_prompt(channel, game, phase="original")
             await asyncio.sleep(1)
 
             # ── 3) 타일 전달 ──
@@ -109,8 +109,8 @@ async def run_game(channel: discord.TextChannel, game: Game):
             await channel.send("🔄 타일이 오른쪽 플레이어에게 전달되었습니다!")
             await asyncio.sleep(0.5)
 
-            # ── 4) 전달 후 DM ──
-            await send_passed_tile_dms(channel, game)
+            # ── 4) 전달 후 타일 확인 안내 ──
+            await send_tile_check_prompt(channel, game, phase="passed")
             await asyncio.sleep(1)
 
             # ── 5) 발견자 수사 ──
@@ -163,49 +163,20 @@ async def run_game(channel: discord.TextChannel, game: Game):
 
 
 # ================================================================
-#  타일 DM
+#  타일 확인 (채널 버튼, 본인에게만 보이는 응답)
 # ================================================================
 
-async def send_tile_dms(channel: discord.TextChannel, game: Game):
-    """각 플레이어에게 타일 정보 DM 전송"""
-    tasks = []
-    for p in game.player_list:
-        if p.is_ai:
-            continue  # AI는 DM 불필요
-        try:
-            embed = EmbedBuilder.tile_dm(p, game)
-            tasks.append(p.user.send(embed=embed))
-        except Exception:
-            pass
+async def send_tile_check_prompt(channel: discord.TextChannel, game: Game, phase: str):
+    """채널에 타일 확인 버튼을 올린다. 사람 플레이어가 없으면 생략한다."""
+    if not any(not p.is_ai for p in game.player_list):
+        return
 
-    if tasks:
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        failed = sum(1 for r in results if isinstance(r, Exception))
-        if failed:
-            await channel.send(
-                f"⚠️ {failed}명에게 DM 전송에 실패했습니다. DM 설정을 확인해주세요!"
-            )
-
-
-async def send_passed_tile_dms(channel: discord.TextChannel, game: Game):
-    """타일 전달 후 결과 DM 전송"""
-    tasks = []
-    for p in game.player_list:
-        if p.is_ai:
-            continue
-        try:
-            embed = EmbedBuilder.passed_tile_dm(p, game)
-            tasks.append(p.user.send(embed=embed))
-        except Exception:
-            pass
-
-    if tasks:
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        failed = sum(1 for r in results if isinstance(r, Exception))
-        if failed:
-            await channel.send(
-                f"⚠️ {failed}명에게 DM 전송에 실패했습니다."
-            )
+    view = TileCheckView(game, phase=phase)
+    if phase == "passed":
+        text = "🔄 아래 버튼을 눌러 본인만 볼 수 있는 새 타일 정보를 확인하세요!"
+    else:
+        text = "🃏 아래 버튼을 눌러 본인만 볼 수 있는 타일 정보를 확인하세요!"
+    await channel.send(text, view=view)
 
 
 # ================================================================
@@ -249,68 +220,31 @@ async def discoverer_phase(channel: discord.TextChannel, game: Game):
             )
 
     else:
-        # ── 인간 발견자 ──
-        try:
-            dm_channel = await discoverer.user.create_dm()
+        # ── 인간 발견자: 채널 버튼으로 시작 → 본인에게만 보이는 응답으로 진행 ──
+        start_view = DiscovererStartView(game, discoverer.id, timeout=150)
+        await channel.send(
+            f"🔍 {discoverer.color_emoji} **{discoverer.name}**님, "
+            "아래 버튼을 눌러 수사를 시작하세요! (본인만 결과를 볼 수 있습니다)",
+            view=start_view,
+        )
 
-            # 1) 용의자 선택
-            select_view = SuspectSelectView(timeout=60)
-            await dm_channel.send(
-                "🔍 **발견자 수사** - 확인할 용의자 2명을 선택하세요:",
-                view=select_view,
-            )
-
-            timed_out = await select_view.wait()
-            if timed_out or not select_view.done:
-                # 타임아웃 시 자동 선택 (0, 1)
-                chosen = [0, 1]
-                await dm_channel.send("⏰ 시간 초과! 자동으로 용의자 1, 2를 선택합니다.")
-            else:
-                chosen = select_view.selected_indices
-
-            viewed = game.set_discoverer_viewed(chosen)
-
-            # 결과 DM
-            embed = EmbedBuilder.discoverer_view_dm(discoverer, viewed, game)
-            await dm_channel.send(embed=embed)
-
-            # 2) 교체 여부
-            swap_view = SwapVictimView(viewed_indices=chosen, timeout=60)
-            await dm_channel.send(
-                "🔄 용의자와 피해자를 교체하시겠습니까?",
-                view=swap_view,
-            )
-
-            timed_out = await swap_view.wait()
-            if timed_out or not swap_view.done:
-                await dm_channel.send("⏰ 시간 초과! 교체 없이 넘어갑니다.")
-                swap_idx = None
-            else:
-                swap_idx = swap_view.swap_idx
-
-            if swap_idx is not None:
-                game.swap_victim(swap_idx)
-                embed = EmbedBuilder.swap_result_dm(True, game)
-                await dm_channel.send(embed=embed)
-                await channel.send(
-                    f"🔄 {discoverer.color_emoji} {discoverer.name}이(가) 용의자와 피해자를 교체했습니다!"
-                )
-            else:
-                embed = EmbedBuilder.swap_result_dm(False, game)
-                await dm_channel.send(embed=embed)
-                await channel.send(
-                    f"⏭️ {discoverer.color_emoji} {discoverer.name}이(가) 교체 없이 넘어갑니다."
-                )
-
-        except discord.Forbidden:
-            # DM 실패 시 자동 처리
+        timed_out = await start_view.wait()
+        if timed_out or not start_view.done:
             await channel.send(
-                f"⚠️ {discoverer.name}에게 DM을 보낼 수 없습니다. 자동으로 수사합니다."
+                f"⏰ {discoverer.name} 시간 초과! 자동으로 수사합니다."
             )
             chosen = AIStrategy.choose_suspects_to_view()
             game.set_discoverer_viewed(chosen)
             await channel.send(
                 f"🔍 {discoverer.name}이(가) 용의자 2명을 확인했습니다. (자동)"
+            )
+        elif start_view.swapped:
+            await channel.send(
+                f"🔄 {discoverer.color_emoji} {discoverer.name}이(가) 용의자와 피해자를 교체했습니다!"
+            )
+        else:
+            await channel.send(
+                f"⏭️ {discoverer.color_emoji} {discoverer.name}이(가) 교체 없이 넘어갑니다."
             )
 
     game.state = GameState.DISCOVERING

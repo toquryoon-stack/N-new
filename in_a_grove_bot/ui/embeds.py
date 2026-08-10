@@ -84,7 +84,7 @@ class EmbedBuilder:
             title=f"🔔 라운드 {game.current_round} 시작!",
             description=(
                 "타일이 배분되었습니다.\n"
-                "각 플레이어에게 DM으로 타일 정보가 전송됩니다."
+                "채널의 버튼을 눌러 본인만 볼 수 있는 타일 정보를 확인하세요."
             ),
             color=COLOR_ROUND,
         )
@@ -116,12 +116,12 @@ class EmbedBuilder:
         return embed
 
     # ================================================================
-    #  DM: 타일 정보
+    #  타일 정보 (채널 버튼 → 본인에게만 보이는 응답)
     # ================================================================
 
     @staticmethod
     def tile_dm(player: Player, game: Game) -> discord.Embed:
-        """DM으로 보내는 타일 정보"""
+        """본인에게만 보이는 타일 정보"""
         embed = discord.Embed(
             title=f"🃏 라운드 {game.current_round} - 당신의 타일",
             color=COLOR_TILE,
@@ -140,7 +140,7 @@ class EmbedBuilder:
 
     @staticmethod
     def passed_tile_dm(player: Player, game: Game) -> discord.Embed:
-        """타일 전달 후 DM"""
+        """타일 전달 후, 본인에게만 보이는 정보"""
         embed = discord.Embed(
             title=f"🔄 라운드 {game.current_round} - 받은 타일",
             color=COLOR_TILE,
@@ -186,7 +186,7 @@ class EmbedBuilder:
         return embed
 
     # ================================================================
-    #  발견자 전용 DM
+    #  발견자 전용 (본인에게만 보이는 응답)
     # ================================================================
 
     @staticmethod
@@ -195,7 +195,7 @@ class EmbedBuilder:
         viewed: List[Tuple[int, Tile]],
         game: Game,
     ) -> discord.Embed:
-        """발견자가 용의자 2명을 확인한 결과 DM"""
+        """발견자가 용의자 2명을 확인한 결과 (본인에게만 보임)"""
         embed = discord.Embed(
             title="🔍 발견자 수사 결과",
             description="용의자 3명 중 2명을 확인했습니다!",
@@ -239,7 +239,7 @@ class EmbedBuilder:
 
     @staticmethod
     def swap_result_dm(swapped: bool, game: Game) -> discord.Embed:
-        """교체 결과 DM"""
+        """교체 결과 (본인에게만 보임)"""
         if swapped:
             embed = discord.Embed(
                 title="🔄 교체 완료!",
