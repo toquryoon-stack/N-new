@@ -110,6 +110,49 @@ class LobbyView(View):
 
 
 # ================================================================
+#  진행 확인 뷰 (모든 사람 플레이어가 확인해야 다음 메시지로 진행)
+# ================================================================
+
+class AckView(View):
+    """진행 상황 메시지에 붙는 [확인] 버튼. 게임에 참가한 모든 사람
+    플레이어(AI 제외)가 눌러야 다음 메시지로 넘어간다."""
+
+    def __init__(self, game: Game, timeout: float = 25):
+        super().__init__(timeout=timeout)
+        self.game = game
+        self.pending_ids = {p.id for p in game.player_list if not p.is_ai}
+        self.acked_ids: set = set()
+        self._update_label()
+
+    def _update_label(self):
+        self.children[0].label = f"✅ 확인 ({len(self.acked_ids)}/{len(self.pending_ids)})"
+
+    @button(label="✅ 확인", style=discord.ButtonStyle.green)
+    async def ack_button(self, interaction: discord.Interaction, btn: Button):
+        if interaction.user.id not in self.pending_ids:
+            await interaction.response.send_message(
+                "이 게임의 참가자가 아닙니다!", ephemeral=True
+            )
+            return
+        if interaction.user.id in self.acked_ids:
+            await interaction.response.send_message(
+                "이미 확인하셨습니다!", ephemeral=True
+            )
+            return
+
+        self.acked_ids.add(interaction.user.id)
+
+        if len(self.acked_ids) >= len(self.pending_ids):
+            btn.disabled = True
+            btn.label = "✅ 모두 확인 완료"
+            await interaction.response.edit_message(view=self)
+            self.stop()
+        else:
+            self._update_label()
+            await interaction.response.edit_message(view=self)
+
+
+# ================================================================
 #  발견자: 용의자 선택 뷰
 # ================================================================
 
@@ -209,11 +252,20 @@ class SwapVictimView(View):
 
 class TileCheckView(View):
     """채널의 버튼을 눌러, 원래 받은 타일과 전달받은 타일을 한 메시지로
-    본인에게만 보이게 확인 (ephemeral)"""
+    본인에게만 보이게 확인 (ephemeral). 모든 사람 플레이어가 한 번씩
+    확인하면(=확인이 곧 진행 확인) 다음 메시지로 넘어간다."""
 
-    def __init__(self, game: Game, timeout: float = 600):
+    def __init__(self, game: Game, timeout: float = 60):
         super().__init__(timeout=timeout)
         self.game = game
+        self.pending_ids = {p.id for p in game.player_list if not p.is_ai}
+        self.viewed_ids: set = set()
+        self._update_label()
+
+    def _update_label(self):
+        self.children[0].label = (
+            f"🃏 내 타일 확인 ({len(self.viewed_ids)}/{len(self.pending_ids)})"
+        )
 
     @button(label="내 타일 확인", style=discord.ButtonStyle.blurple, emoji="🃏")
     async def check_button(self, interaction: discord.Interaction, btn: Button):
@@ -227,6 +279,19 @@ class TileCheckView(View):
         from .embeds import EmbedBuilder
         embed = EmbedBuilder.my_tiles(player, self.game)
         await interaction.response.send_message(embed=embed, ephemeral=True)
+
+        if interaction.user.id in self.viewed_ids:
+            return
+        self.viewed_ids.add(interaction.user.id)
+
+        if len(self.viewed_ids) >= len(self.pending_ids):
+            btn.disabled = True
+            btn.label = "🃏 모두 확인 완료"
+            await interaction.message.edit(view=self)
+            self.stop()
+        else:
+            self._update_label()
+            await interaction.message.edit(view=self)
 
 
 # ================================================================

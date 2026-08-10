@@ -15,6 +15,7 @@ from game.enums import GameState
 from ui.embeds import EmbedBuilder
 from ui.views import (
     LobbyView,
+    AckView,
     TileCheckView,
     DiscovererStartView,
     SuspectPeekView,
@@ -37,6 +38,37 @@ manager = GameManager()
 
 # AI 딜레이 (자연스러운 느낌)
 AI_DELAY = 1.5
+
+# 진행 메시지 확인 대기 최대 시간 (초) - 시간 초과 시 자동으로 다음으로 진행
+ACK_TIMEOUT = 25
+
+
+async def send_ack(
+    channel: discord.TextChannel,
+    game: Game,
+    content: Optional[str] = None,
+    embed: Optional[discord.Embed] = None,
+):
+    """메시지를 보내고, 참가 중인 모든 사람 플레이어가 [확인] 버튼을
+    누를 때까지 기다린 뒤 다음 메시지로 진행한다.
+
+    메시지가 연속으로 쏟아지면 플레이어가 놓치기 쉬워서, 각 진행
+    알림마다 확인을 받고 넘어가도록 한다. (시간 초과 시 자동 진행)
+    """
+    view = AckView(game, timeout=ACK_TIMEOUT)
+    if not view.pending_ids:
+        await channel.send(content=content, embed=embed)
+        return
+
+    note = "모두 확인하면 다음으로 진행됩니다."
+    if embed is not None:
+        prev = embed.footer.text if embed.footer else None
+        embed.set_footer(text=f"{prev} · {note}" if prev else note)
+    else:
+        content = f"{content}\n-# {note}" if content else note
+
+    await channel.send(content=content, embed=embed, view=view)
+    await view.wait()
 
 
 # ================================================================
@@ -98,36 +130,31 @@ async def run_game(channel: discord.TextChannel, game: Game):
             # ── 1) 라운드 시작 ──
             game.start_round()
             embed = EmbedBuilder.round_start(game)
-            await channel.send(embed=embed)
-            await asyncio.sleep(1)
+            await send_ack(channel, game, embed=embed)
 
             # ── 2) 타일 전달 ──
             game.pass_tiles()
-            await channel.send("🔄 타일이 오른쪽 플레이어에게 전달되었습니다!")
-            await asyncio.sleep(0.5)
+            await send_ack(channel, game, content="🔄 타일이 오른쪽 플레이어에게 전달되었습니다!")
 
             # ── 3) 타일 확인 안내 (원래 타일 + 전달받은 타일을 한 메시지로) ──
+            # 버튼을 누르는 것 자체가 확인이므로 별도 확인 버튼은 없다.
             await send_tile_check_prompt(channel, game)
-            await asyncio.sleep(1)
 
             # ── 4) 발견자 수사 ──
             await discoverer_phase(channel, game)
-            await asyncio.sleep(1)
 
             # ── 5) 고발 단계 ──
             await accusation_phase(channel, game)
-            await asyncio.sleep(1)
 
             # ── 6) 공개 & 판정 ──
             result = game.reveal_and_judge()
             embed = EmbedBuilder.reveal_suspects(game, result)
-            await channel.send(embed=embed)
-            await asyncio.sleep(2)
+            await send_ack(channel, game, embed=embed)
 
             # ── 7) 결과 적용 ──
             player_results = game.apply_results(result)
             embed = EmbedBuilder.round_results(game, result, player_results)
-            await channel.send(embed=embed)
+            await send_ack(channel, game, embed=embed)
 
             # ── 8) 게임 종료 체크 ──
             over_info = game.check_game_over()
@@ -165,16 +192,18 @@ async def run_game(channel: discord.TextChannel, game: Game):
 
 async def send_tile_check_prompt(channel: discord.TextChannel, game: Game):
     """채널에 타일 확인 버튼을 올린다. 원래 받은 타일과 전달받은 타일을
-    한 메시지(본인에게만 보이는 응답)로 함께 보여준다. 사람 플레이어가
-    없으면 생략한다."""
-    if not any(not p.is_ai for p in game.player_list):
+    한 메시지(본인에게만 보이는 응답)로 함께 보여준다. 모든 사람
+    플레이어가 확인하면(=확인이 곧 진행 확인) 다음으로 넘어간다."""
+    view = TileCheckView(game)
+    if not view.pending_ids:
         return
 
-    view = TileCheckView(game)
     await channel.send(
-        "🃏 아래 버튼을 눌러 본인만 볼 수 있는 타일 정보를 확인하세요!",
+        "🃏 아래 버튼을 눌러 본인만 볼 수 있는 타일 정보를 확인하세요! "
+        "모두 확인하면 다음으로 진행됩니다.",
         view=view,
     )
+    await view.wait()
 
 
 # ================================================================
@@ -185,19 +214,21 @@ async def discoverer_phase(channel: discord.TextChannel, game: Game):
     """발견자가 용의자 2명을 확인하고, 교체를 결정한다."""
     discoverer = game.discoverer
 
-    await channel.send(
-        f"🔍 {discoverer.color_emoji} **{discoverer.name}**이(가) 현장을 수사합니다..."
-    )
-
     if discoverer.is_ai:
         # ── AI 발견자 ──
+        await send_ack(
+            channel, game,
+            content=f"🔍 {discoverer.color_emoji} **{discoverer.name}**이(가) 현장을 수사합니다...",
+        )
+
         await asyncio.sleep(AI_DELAY)
         chosen = AIStrategy.choose_suspects_to_view()
         viewed = game.set_discoverer_viewed(chosen)
 
         chosen_text = ", ".join(f"{i + 1}번" for i in sorted(chosen))
-        await channel.send(
-            f"🤖 {discoverer.name}이(가) 용의자 {chosen_text}을(를) 확인했습니다."
+        await send_ack(
+            channel, game,
+            content=f"🤖 {discoverer.name}이(가) 용의자 {chosen_text}을(를) 확인했습니다.",
         )
 
         # AI 교체 결정
@@ -210,12 +241,14 @@ async def discoverer_phase(channel: discord.TextChannel, game: Game):
 
         if swap_idx is not None:
             game.swap_victim(swap_idx)
-            await channel.send(
-                f"🔄 {discoverer.name}이(가) 용의자와 피해자를 교체했습니다!"
+            await send_ack(
+                channel, game,
+                content=f"🔄 {discoverer.name}이(가) 용의자와 피해자를 교체했습니다!",
             )
         else:
-            await channel.send(
-                f"⏭️ {discoverer.name}이(가) 교체 없이 넘어갑니다."
+            await send_ack(
+                channel, game,
+                content=f"⏭️ {discoverer.name}이(가) 교체 없이 넘어갑니다.",
             )
 
     else:
@@ -232,22 +265,26 @@ async def discoverer_phase(channel: discord.TextChannel, game: Game):
             chosen = AIStrategy.choose_suspects_to_view()
             game.set_discoverer_viewed(chosen)
             chosen_text = ", ".join(f"{i + 1}번" for i in sorted(chosen))
-            await channel.send(
-                f"⏰ {discoverer.name} 시간 초과! 자동으로 용의자 {chosen_text}을(를) 확인했습니다."
+            await send_ack(
+                channel, game,
+                content=f"⏰ {discoverer.name} 시간 초과! 자동으로 용의자 {chosen_text}을(를) 확인했습니다.",
             )
         else:
             chosen_text = ", ".join(f"{i + 1}번" for i in sorted(start_view.chosen_indices))
-            await channel.send(
-                f"🔍 {discoverer.color_emoji} {discoverer.name}이(가) "
-                f"용의자 {chosen_text}을(를) 확인했습니다."
+            await send_ack(
+                channel, game,
+                content=f"🔍 {discoverer.color_emoji} {discoverer.name}이(가) "
+                        f"용의자 {chosen_text}을(를) 확인했습니다.",
             )
             if start_view.swapped:
-                await channel.send(
-                    f"🔄 {discoverer.color_emoji} {discoverer.name}이(가) 용의자와 피해자를 교체했습니다!"
+                await send_ack(
+                    channel, game,
+                    content=f"🔄 {discoverer.color_emoji} {discoverer.name}이(가) 용의자와 피해자를 교체했습니다!",
                 )
             else:
-                await channel.send(
-                    f"⏭️ {discoverer.color_emoji} {discoverer.name}이(가) 교체 없이 넘어갑니다."
+                await send_ack(
+                    channel, game,
+                    content=f"⏭️ {discoverer.color_emoji} {discoverer.name}이(가) 교체 없이 넘어갑니다.",
                 )
 
     game.state = GameState.DISCOVERING
@@ -262,7 +299,7 @@ async def accusation_phase(channel: discord.TextChannel, game: Game):
     game.start_accusation()
 
     embed = EmbedBuilder.accusation_phase(game)
-    await channel.send(embed=embed)
+    await send_ack(channel, game, embed=embed)
 
     is_first_accuser = True  # 발견자(첫 고발자)는 이미 수사 단계에서 2명을 확인했음
 
@@ -286,8 +323,9 @@ async def accusation_phase(channel: discord.TextChannel, game: Game):
                 if timed_out or not peek_view.done:
                     # 확인을 안 했어도 game 쪽에는 최신 정보가 없으므로
                     # AI 로직과 동일하게 정보 없이 진행한다.
-                    await channel.send(
-                        f"⏰ {accuser.name} 확인 시간 초과! 정보 없이 고발을 진행합니다."
+                    await send_ack(
+                        channel, game,
+                        content=f"⏰ {accuser.name} 확인 시간 초과! 정보 없이 고발을 진행합니다.",
                     )
                     accuser.known_suspect_indices = []
 
@@ -304,7 +342,7 @@ async def accusation_phase(channel: discord.TextChannel, game: Game):
             game.make_accusation(accuser.id, chosen_idx)
 
             embed = EmbedBuilder.ai_accusation(accuser, chosen_idx)
-            await channel.send(embed=embed)
+            await send_ack(channel, game, embed=embed)
 
         else:
             # ── 인간 고발 ──
@@ -318,16 +356,18 @@ async def accusation_phase(channel: discord.TextChannel, game: Game):
                 import random
                 chosen_idx = random.randint(0, 2)
                 game.make_accusation(accuser.id, chosen_idx)
-                await channel.send(
-                    f"⏰ {accuser.color_emoji} {accuser.name} 시간 초과! "
-                    f"자동으로 **용의자 {chosen_idx + 1}**을(를) 고발합니다."
+                await send_ack(
+                    channel, game,
+                    content=f"⏰ {accuser.color_emoji} {accuser.name} 시간 초과! "
+                            f"자동으로 **용의자 {chosen_idx + 1}**을(를) 고발합니다.",
                 )
             else:
                 chosen_idx = accuse_view.chosen_idx
                 game.make_accusation(accuser.id, chosen_idx)
-                await channel.send(
-                    f"⚖️ {accuser.color_emoji} **{accuser.name}**이(가) "
-                    f"**용의자 {chosen_idx + 1}**을(를) 고발했습니다!"
+                await send_ack(
+                    channel, game,
+                    content=f"⚖️ {accuser.color_emoji} **{accuser.name}**이(가) "
+                            f"**용의자 {chosen_idx + 1}**을(를) 고발했습니다!",
                 )
 
         is_first_accuser = False
@@ -336,9 +376,7 @@ async def accusation_phase(channel: discord.TextChannel, game: Game):
         if not game.advance_accuser():
             break
 
-        await asyncio.sleep(0.5)
-
-    await channel.send("✅ 모든 플레이어가 고발을 완료했습니다!")
+    await send_ack(channel, game, content="✅ 모든 플레이어가 고발을 완료했습니다!")
 
 
 def _get_ai_suspect_info(game: Game, ai_player) -> list:
