@@ -15,6 +15,7 @@ from game.enums import GameState, Vote, QuestVote, QuestResult, Role
 from game.roles import get_night_info, ROLE_EMOJI
 from game.ai import AIStrategy, reset_ai_names
 from ui.embeds import EmbedBuilder
+from ui.seating import render_seating_circle
 from ui.views import (
     LobbyView,
     TeamSelectView,
@@ -87,6 +88,21 @@ async def rules_command(interaction: discord.Interaction):
 #  진행 확인 헬퍼
 # ================================================================
 
+def _seating_file(game: Game, team_ids: Optional[list] = None, center_label: str = "아발롬") -> discord.File:
+    """원탁에 둘러앉은 좌석 배치 이미지를 discord.File로 만든다.
+
+    오프라인으로 원으로 둘러앉아 플레이하는 것처럼, 앉은 순서(player_order)를
+    12시 방향부터 시계 방향으로 배치하고 현재 리더를 금색으로 강조한다.
+    """
+    buf = render_seating_circle(
+        players=game.player_list,
+        leader_id=game.leader.id,
+        team_ids=team_ids,
+        center_label=center_label,
+    )
+    return discord.File(fp=buf, filename="seating.png")
+
+
 async def send_and_confirm(channel, game, **send_kwargs):
     """메시지를 보내고 모든 인간 플레이어가 확인할 때까지 대기."""
     human_ids = set()
@@ -132,7 +148,12 @@ async def run_game(channel: discord.TextChannel, game: Game):
 
                 # 원정대 편성
                 embed = EmbedBuilder.team_build(game)
-                await channel.send(embed=embed)
+                seating_file = _seating_file(
+                    game,
+                    center_label=f"퀘스트 {game.current_quest.quest_number} 편성 중",
+                )
+                embed.set_image(url="attachment://seating.png")
+                await channel.send(embed=embed, file=seating_file)
 
                 team_ids = await build_team(channel, game)
                 if team_ids is None:
@@ -143,7 +164,13 @@ async def run_game(channel: discord.TextChannel, game: Game):
 
                 # 원정대 제안 공개
                 embed = EmbedBuilder.team_proposed(game)
-                await send_and_confirm(channel, game, embed=embed)
+                seating_file = _seating_file(
+                    game,
+                    team_ids=game.current_team_ids,
+                    center_label=f"퀘스트 {game.current_quest.quest_number} 원정대",
+                )
+                embed.set_image(url="attachment://seating.png")
+                await send_and_confirm(channel, game, embed=embed, file=seating_file)
 
                 # 팀 투표
                 game.start_team_vote()
