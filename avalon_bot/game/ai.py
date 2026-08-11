@@ -345,7 +345,9 @@ class AIStrategy:
                     # 반대하되, 너무 정확하면 들킴
                     return Vote.REJECT if random.random() < 0.8 else Vote.APPROVE
                 else:
-                    return Vote.APPROVE if random.random() < 0.9 else Vote.REJECT
+                    # 아는 악이 하나도 없다면(=팀이 전부 선) 사실상 확실한 정보이므로
+                    # 거의 확실하게 찬성한다 (아주 가끔만 헷갈리게 반대)
+                    return Vote.APPROVE if random.random() < 0.95 else Vote.REJECT
 
             # 퍼시벌: 진짜 멀린이라 판단되는 사람이 팀에 있는지로 판단
             if player.role == Role.PERCIVAL:
