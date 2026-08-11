@@ -1,2 +1,7 @@
 node_modules/
 discord-config.json
+
+# avalon_bot (Python)
+avalon_bot/.env
+avalon_bot/**/__pycache__/
+avalon_bot/**/*.pyc
