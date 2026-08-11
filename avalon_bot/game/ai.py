@@ -119,6 +119,23 @@ def _score_merlin_candidates(
     return score
 
 
+def _get_confirmed_evil_ids(quest_history: List[dict]) -> set:
+    """투표 결과만으로 100% 확정할 수 있는 악을 찾는다.
+
+    2인 원정대에서 실패가 2개 나왔다면, 그 2명 모두 실패를 냈다는 뜻이고
+    선은 절대 실패를 낼 수 없으므로 둘 다 확정적으로 악이다.
+    이 정보는 (인간이든 AI든) 누구나 공개된 결과만 보고 알 수 있으므로
+    멀린을 포함한 모든 선 진영이 활용할 수 있다 - 심지어 모드레드처럼
+    멀린에게 원래 안 보이는 악도 이렇게 들키면 정체가 드러난다.
+    """
+    confirmed = set()
+    for hist in quest_history:
+        team_ids = hist.get("team_ids", [])
+        if len(team_ids) == 2 and hist.get("fail_count", 0) == 2:
+            confirmed.update(team_ids)
+    return confirmed
+
+
 def _percival_guess_merlin_id(
     candidate_ids: List[int],
     quest_history: List[dict],
@@ -161,6 +178,7 @@ class AIStrategy:
             선택된 player_id 리스트
         """
         player_ids = [p.id for p in all_players]
+        confirmed_evil = _get_confirmed_evil_ids(quest_history)
 
         if leader.is_evil:
             # ── 악 리더 전략 ──
@@ -173,9 +191,12 @@ class AIStrategy:
                 if p.is_evil and p.id != leader.id
             ]
             if evil_allies:
-                # 70% 확률로 악 동료 1명 포함
+                # 70% 확률로 악 동료 1명 포함 - 이미 정체가 탄로난 동료보다는
+                # 아직 안 들킨 동료를 우선해서 더 의심을 사지 않도록 한다
                 if random.random() < 0.7:
-                    team.append(random.choice(evil_allies))
+                    not_exposed = [pid for pid in evil_allies if pid not in confirmed_evil]
+                    pool = not_exposed if not_exposed else evil_allies
+                    team.append(random.choice(pool))
 
             # 나머지는 선 진영에서 채움 (의심 회피)
             good_players = [
@@ -197,8 +218,8 @@ class AIStrategy:
             team = [leader.id]
 
             if leader.role == Role.MERLIN:
-                # 멀린: 자신이 아는 악(모드레드는 안 보임)만 피해서 선택
-                known_evil = _merlin_known_evil_ids(all_players)
+                # 멀린: 자신이 아는 악(모드레드는 안 보임) + 투표로 탄로난 악을 피해서 선택
+                known_evil = _merlin_known_evil_ids(all_players) | confirmed_evil
                 believed_good = [
                     p.id for p in all_players
                     if p.id != leader.id and p.id not in known_evil
@@ -228,16 +249,23 @@ class AIStrategy:
                 if believed_merlin is not None:
                     team.append(believed_merlin)
 
+                # 확정된 악은 최대한 피해서 나머지를 채운다
                 others = [
                     p.id for p in all_players
-                    if p.id not in team
+                    if p.id not in team and p.id not in confirmed_evil
                 ]
                 random.shuffle(others)
                 while len(team) < team_size and others:
                     team.append(others.pop())
 
+                # 그래도 부족하면 어쩔 수 없이 확정 악도 포함
+                last_resort = [p.id for p in all_players if p.id not in team]
+                random.shuffle(last_resort)
+                while len(team) < team_size and last_resort:
+                    team.append(last_resort.pop())
+
             else:
-                # 충신: 랜덤 (이전 퀘스트 결과 참고)
+                # 충신: 투표 기록으로 의심되는 사람은 피하고, 확정된 악은 절대 피함
                 suspicious = _get_suspicious_ids(quest_history, all_players)
                 safe = [
                     p.id for p in all_players
@@ -247,14 +275,20 @@ class AIStrategy:
                 while len(team) < team_size and safe:
                     team.append(safe.pop())
 
-                # 부족하면 의심자도 포함
+                # 부족하면 의심자 중에서 채우되, 확정 악은 최후의 순간까지 피한다
                 remaining = [
                     pid for pid in player_ids
-                    if pid not in team
+                    if pid not in team and pid not in confirmed_evil
                 ]
                 random.shuffle(remaining)
                 while len(team) < team_size and remaining:
                     team.append(remaining.pop())
+
+                # 그래도 부족하면 어쩔 수 없이 확정 악도 포함
+                last_resort = [pid for pid in player_ids if pid not in team]
+                random.shuffle(last_resort)
+                while len(team) < team_size and last_resort:
+                    team.append(last_resort.pop())
 
         return team[:team_size]
 
@@ -276,22 +310,32 @@ class AIStrategy:
         if rejection_count >= 4:
             return Vote.APPROVE
 
+        # 투표 기록으로 100% 확정된 악 (2인 원정대에서 둘 다 실패)
+        confirmed_evil = _get_confirmed_evil_ids(quest_history)
+
         if player.is_evil:
             # ── 악 전략 ──
+            # 악은 팀에 악(자신 포함)이 있으면 원정대를 찬성해야 실패를 낼 기회가 생긴다.
             evil_in_team = any(
                 p.id in team_ids for p in all_players if p.is_evil
             )
             if evil_in_team:
-                # 악이 팀에 있으면 높은 확률로 찬성
-                return Vote.APPROVE if random.random() < 0.85 else Vote.REJECT
+                approve_prob = 0.85
+                # 다른 사람들이 나를 악으로 볼 수 있으므로, 이미 의심/탄로난 상황이면
+                # 너무 티나게 계속 찬성만 하지 않도록 확률을 낮춘다
+                if player.id in confirmed_evil:
+                    approve_prob = 0.55
+                elif any(pid in confirmed_evil for pid in team_ids):
+                    approve_prob = 0.65
+                return Vote.APPROVE if random.random() < approve_prob else Vote.REJECT
             else:
                 # 악이 없으면 반대 (하지만 너무 반대만 하면 의심)
                 return Vote.REJECT if random.random() < 0.7 else Vote.APPROVE
         else:
             # ── 선 전략 ──
-            if player.id in team_ids:
-                # 자기가 팀에 있으면 찬성 경향
-                return Vote.APPROVE if random.random() < 0.8 else Vote.REJECT
+            # 확정된 악이 팀에 있다면 그 무엇보다 우선해서 반대한다
+            if any(pid in confirmed_evil for pid in team_ids):
+                return Vote.REJECT if random.random() < 0.97 else Vote.APPROVE
 
             # 멀린: 자신이 아는 악(모드레드는 안 보임)이 팀에 있는지로 판단
             if player.role == Role.MERLIN:
@@ -315,7 +359,11 @@ class AIStrategy:
                 if believed_merlin is not None and believed_merlin in team_ids:
                     return Vote.APPROVE if random.random() < 0.85 else Vote.REJECT
 
-            # 퍼시벌(판단 불가시)/충신: 기본 전략
+            if player.id in team_ids:
+                # 자기가 팀에 있으면 찬성 경향 (뚜렷한 반대 근거가 없을 때만)
+                return Vote.APPROVE if random.random() < 0.8 else Vote.REJECT
+
+            # 퍼시벌(판단 불가시)/충신: 투표 기록 기반 의심도로 판단
             suspicious = _get_suspicious_ids(quest_history, all_players)
             suspicious_in_team = any(pid in team_ids for pid in suspicious)
             if suspicious_in_team:
@@ -332,23 +380,39 @@ class AIStrategy:
         quest_number: int,
         success_count: int,
         fail_count: int,
+        team_ids: List[int],
+        all_players: List[Player],
     ) -> QuestVote:
         """퀘스트에서 성공/실패를 결정한다."""
         if player.is_good:
             # 선은 항상 성공
             return QuestVote.SUCCESS
-        else:
-            # ── 악 전략 ──
-            # 초반에는 성공으로 위장할 수도 있음
-            if quest_number == 1 and random.random() < 0.3:
-                return QuestVote.SUCCESS  # 30% 확률로 1차 퀘스트 위장
 
-            # 이미 2개 실패했으면 성공해서 의심 피하기
-            if fail_count >= 2 and random.random() < 0.4:
+        # ── 악 전략 ──
+        evil_teammates = [
+            p.id for p in all_players
+            if p.id in team_ids and p.is_evil and p.id != player.id
+        ]
+
+        # 2인 원정대에 악이 둘(자신 포함) 있으면, 둘 다 실패를 내는 순간
+        # "실패 2개 = 둘 다 악"이라는 사실이 그대로 공개되어 정체가 탄로난다.
+        # 따라서 반드시 한 명만 실패 담당을 맡도록 조율한다 (id가 작은 쪽 담당).
+        if len(team_ids) == 2 and evil_teammates:
+            designated_failer = min(player.id, *evil_teammates)
+            if player.id != designated_failer:
                 return QuestVote.SUCCESS
+            # 담당자는 아래 일반 판단을 따른다 (매번 실패는 아니게 헷갈리게 낸다)
 
-            # 기본적으로 실패
-            return QuestVote.FAIL
+        # 초반에는 성공으로 위장할 수도 있음
+        if quest_number == 1 and random.random() < 0.3:
+            return QuestVote.SUCCESS  # 30% 확률로 1차 퀘스트 위장
+
+        # 이미 2개 실패했으면 성공해서 의심 피하기
+        if fail_count >= 2 and random.random() < 0.4:
+            return QuestVote.SUCCESS
+
+        # 기본적으로 실패, 하지만 매번 확정적이지 않도록 약간의 성공도 섞는다
+        return QuestVote.SUCCESS if random.random() < 0.15 else QuestVote.FAIL
 
     # ================================================================
     #  암살자: 멀린 지목
