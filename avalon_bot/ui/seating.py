@@ -7,12 +7,15 @@
 
 from __future__ import annotations
 import io
+import logging
 import math
 import os
 import re
 from typing import List, Optional, TYPE_CHECKING
 
 from PIL import Image, ImageDraw, ImageFont
+
+log = logging.getLogger("avalon.seating")
 
 if TYPE_CHECKING:
     from game.player import Player
@@ -58,9 +61,63 @@ _TEXT_DARK = (30, 30, 30, 255)
 _ARROW_COLOR = (236, 240, 241, 230)
 
 
-def _font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont:
-    path = _FONT_BOLD_PATH if bold else _FONT_REGULAR_PATH
-    return ImageFont.truetype(path, size)
+# 번들 폰트를 열 수 없을 때 시도해볼 시스템 한글 폰트 경로들
+# (윈도우: 맑은 고딕, macOS: 애플고딕, 리눅스: 나눔고딕)
+_SYSTEM_FONT_FALLBACKS = {
+    False: [
+        r"C:\Windows\Fonts\malgun.ttf",
+        "/System/Library/Fonts/Supplemental/AppleGothic.ttf",
+        "/usr/share/fonts/truetype/nanum/NanumGothic.ttf",
+    ],
+    True: [
+        r"C:\Windows\Fonts\malgunbd.ttf",
+        "/System/Library/Fonts/Supplemental/AppleGothic.ttf",
+        "/usr/share/fonts/truetype/nanum/NanumGothicBold.ttf",
+    ],
+}
+
+_font_cache: dict = {}
+_font_warning_shown = False
+
+
+def _font(size: int, bold: bool = False) -> ImageFont.ImageFont:
+    """폰트를 불러온다. 번들 폰트가 없거나 손상됐어도 게임이 멈추지 않도록,
+    시스템 한글 폰트 → PIL 기본 폰트 순서로 대체한다."""
+    global _font_warning_shown
+
+    key = (size, bold)
+    if key in _font_cache:
+        return _font_cache[key]
+
+    candidates = [_FONT_BOLD_PATH if bold else _FONT_REGULAR_PATH]
+    candidates += _SYSTEM_FONT_FALLBACKS[bold]
+
+    for path in candidates:
+        if not path or not os.path.isfile(path):
+            continue
+        try:
+            font = ImageFont.truetype(path, size)
+            _font_cache[key] = font
+            return font
+        except OSError as e:
+            log.warning("폰트를 열지 못했습니다 (%s): %s", path, e)
+
+    if not _font_warning_shown:
+        log.warning(
+            "사용 가능한 한글 폰트를 찾지 못했습니다. "
+            "avalon_bot/assets/fonts/NanumGothic-Regular.ttf, "
+            "NanumGothic-Bold.ttf 파일이 있는지 확인해주세요. "
+            "일단 기본 폰트로 대체해서 진행합니다 (한글이 깨져 보일 수 있음)."
+        )
+        _font_warning_shown = True
+
+    try:
+        font = ImageFont.load_default(size=size)
+    except TypeError:
+        # 구버전 Pillow는 load_default()에 size 인자를 받지 않는다
+        font = ImageFont.load_default()
+    _font_cache[key] = font
+    return font
 
 
 def _seat_positions(n: int, cx: int, cy: int, radius: float):

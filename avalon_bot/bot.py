@@ -88,19 +88,26 @@ async def rules_command(interaction: discord.Interaction):
 #  진행 확인 헬퍼
 # ================================================================
 
-def _seating_file(game: Game, team_ids: Optional[list] = None, center_label: str = "아발롬") -> discord.File:
+def _seating_file(game: Game, team_ids: Optional[list] = None, center_label: str = "아발롬") -> Optional[discord.File]:
     """원탁에 둘러앉은 좌석 배치 이미지를 discord.File로 만든다.
 
     오프라인으로 원으로 둘러앉아 플레이하는 것처럼, 앉은 순서(player_order)를
     12시 방향부터 시계 방향으로 배치하고 현재 리더를 금색으로 강조한다.
+
+    이미지 생성이 실패해도(폰트 누락 등) 게임 자체가 멈추면 안 되므로,
+    실패 시 None을 반환하고 호출부에서 이미지 없이 계속 진행한다.
     """
-    buf = render_seating_circle(
-        players=game.player_list,
-        leader_id=game.leader.id,
-        team_ids=team_ids,
-        center_label=center_label,
-    )
-    return discord.File(fp=buf, filename="seating.png")
+    try:
+        buf = render_seating_circle(
+            players=game.player_list,
+            leader_id=game.leader.id,
+            team_ids=team_ids,
+            center_label=center_label,
+        )
+        return discord.File(fp=buf, filename="seating.png")
+    except Exception as e:
+        log.warning(f"좌석 이미지 생성 실패, 이미지 없이 계속 진행합니다: {e}")
+        return None
 
 
 async def send_and_confirm(channel, game, **send_kwargs):
@@ -152,8 +159,11 @@ async def run_game(channel: discord.TextChannel, game: Game):
                     game,
                     center_label=f"퀘스트 {game.current_quest.quest_number} 편성 중",
                 )
-                embed.set_image(url="attachment://seating.png")
-                await channel.send(embed=embed, file=seating_file)
+                if seating_file is not None:
+                    embed.set_image(url="attachment://seating.png")
+                    await channel.send(embed=embed, file=seating_file)
+                else:
+                    await channel.send(embed=embed)
 
                 team_ids = await build_team(channel, game)
                 if team_ids is None:
@@ -169,8 +179,11 @@ async def run_game(channel: discord.TextChannel, game: Game):
                     team_ids=game.current_team_ids,
                     center_label=f"퀘스트 {game.current_quest.quest_number} 원정대",
                 )
-                embed.set_image(url="attachment://seating.png")
-                await send_and_confirm(channel, game, embed=embed, file=seating_file)
+                if seating_file is not None:
+                    embed.set_image(url="attachment://seating.png")
+                    await send_and_confirm(channel, game, embed=embed, file=seating_file)
+                else:
+                    await send_and_confirm(channel, game, embed=embed)
 
                 # 팀 투표
                 game.start_team_vote()
