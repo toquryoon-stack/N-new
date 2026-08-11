@@ -133,17 +133,18 @@ def _seat_positions(n: int, cx: int, cy: int, radius: float):
 
 
 def _draw_clockwise_arrow(draw: ImageDraw.ImageDraw, cx: int, cy: int, radius: float):
-    """원탁 안쪽에 '시계 방향' 화살표(호)를 그린다."""
+    """원탁 가운데에 큼직한 '시계 방향' 화살표(호)만 그린다."""
+    width = max(10, int(radius * 0.16))
     bbox = [cx - radius, cy - radius, cx + radius, cy + radius]
-    start_deg, end_deg = -95, 15
-    draw.arc(bbox, start=start_deg, end=end_deg, fill=_ARROW_COLOR, width=6)
+    start_deg, end_deg = -110, 70
+    draw.arc(bbox, start=start_deg, end=end_deg, fill=_ARROW_COLOR, width=width)
 
     end_angle = math.radians(end_deg)
     tip_x = cx + radius * math.cos(end_angle)
     tip_y = cy + radius * math.sin(end_angle)
 
     tangent = end_angle + math.pi / 2
-    head_len = 16
+    head_len = width * 1.8
     left = (
         tip_x - head_len * math.cos(tangent - math.radians(150)),
         tip_y - head_len * math.sin(tangent - math.radians(150)),
@@ -159,15 +160,16 @@ def render_seating_circle(
     players: List["Player"],
     leader_id: Optional[int] = None,
     team_ids: Optional[List[int]] = None,
-    center_label: str = "아발롬",
 ) -> io.BytesIO:
     """플레이어를 원탁에 둘러앉힌 좌석 배치 이미지를 생성한다.
+
+    이름/좌석을 크게 키우기 위해 가운데는 시계 방향 화살표만 그리고,
+    퀘스트 번호 등 다른 문구는 (임베드 쪽에 이미 있으므로) 넣지 않는다.
 
     Args:
         players: 앉은 순서(player_order)대로 정렬된 플레이어 리스트
         leader_id: 현재 리더(원정대장)의 id - 금색으로 강조
         team_ids: 현재 제안/편성된 원정대원 id 목록 - 파란 테두리로 강조
-        center_label: 원탁 가운데 표시할 문구
 
     Returns:
         PNG 이미지 바이트를 담은 BytesIO (파일 포인터는 처음으로 되감겨 있음)
@@ -175,34 +177,29 @@ def render_seating_circle(
     team_ids = set(team_ids or [])
     n = len(players)
 
-    size = 900
+    size = 820
     cx, cy = size // 2, size // 2
-    table_radius = 260
-    seat_radius_pos = 370  # 좌석 중심이 배치되는 반지름
-    seat_size = 78 if n <= 8 else 68
+    table_radius = 130
+    seat_radius_pos = 285  # 좌석 중심이 배치되는 반지름
+    seat_size = 150 if n <= 6 else (135 if n <= 8 else 120)
+    name_max_len = 7 if n <= 8 else 6
 
     img = Image.new("RGBA", (size, size), _BG)
     draw = ImageDraw.Draw(img)
 
-    # ── 원탁 ──
+    # ── 원탁 (가운데는 방향 표시만) ──
     draw.ellipse(
         [cx - table_radius, cy - table_radius, cx + table_radius, cy + table_radius],
         fill=_TABLE_FILL,
         outline=_TABLE_EDGE,
         width=6,
     )
+    _draw_clockwise_arrow(draw, cx, cy, table_radius - 28)
 
-    _draw_clockwise_arrow(draw, cx, cy, table_radius - 40)
-
-    # ── 원탁 가운데 문구 ──
-    title_font = _font(34, bold=True)
-    sub_font = _font(20)
-    _draw_centered_text(draw, (cx, cy - 14), _truncate(center_label, 14), title_font, _TEXT_LIGHT)
-    _draw_centered_text(draw, (cx, cy + 26), "시계 방향으로 진행", sub_font, (220, 220, 220, 255))
-
-    # ── 좌석 ──
-    name_font = _font(22, bold=True)
-    tag_font = _font(16, bold=True)
+    # ── 좌석 (최대한 크게) ──
+    name_font = _font(40, bold=True)
+    label_font = _font(30, bold=True)
+    tag_font = _font(24, bold=True)
     positions = _seat_positions(n, cx, cy, seat_radius_pos)
 
     for player, (x, y, _angle) in zip(players, positions):
@@ -225,21 +222,21 @@ def render_seating_circle(
             [x - r, y - r, x + r, y + r],
             fill=fill,
             outline=(255, 255, 255, 255),
-            width=4 if is_leader or is_team else 2,
+            width=5 if is_leader or is_team else 3,
         )
 
         seat_label = _seat_glyph(player)
         _draw_centered_text(draw, (x, y), seat_label, name_font, text_color)
 
         if is_leader:
-            _draw_centered_text(draw, (x, y - r - 22), "리더", tag_font, _SEAT_LEADER)
+            _draw_centered_text(draw, (x, y - r - 30), "리더", tag_font, _SEAT_LEADER)
 
         if is_ai:
             _draw_ai_badge(draw, x + r * 0.72, y + r * 0.72)
 
-        name = _truncate(_clean_text(player.name), 8)
-        name_y = y + r + 22
-        _draw_centered_text(draw, (x, name_y), name, tag_font, _TEXT_LIGHT)
+        name = _truncate(_clean_text(player.name), name_max_len)
+        name_y = y + r + 30
+        _draw_centered_text(draw, (x, name_y), name, label_font, _TEXT_LIGHT)
 
     buf = io.BytesIO()
     img.save(buf, format="PNG")
@@ -257,10 +254,10 @@ def _seat_glyph(player: "Player") -> str:
 
 
 def _draw_ai_badge(draw: ImageDraw.ImageDraw, x: float, y: float):
-    """AI 플레이어 좌석에 작은 'AI' 배지를 그린다."""
-    r = 15
-    draw.ellipse([x - r, y - r, x + r, y + r], fill=(44, 62, 80, 255), outline=(255, 255, 255, 255), width=2)
-    _draw_centered_text(draw, (x, y), "AI", _font(13, bold=True), _TEXT_LIGHT)
+    """AI 플레이어 좌석에 'AI' 배지를 그린다."""
+    r = 24
+    draw.ellipse([x - r, y - r, x + r, y + r], fill=(44, 62, 80, 255), outline=(255, 255, 255, 255), width=3)
+    _draw_centered_text(draw, (x, y), "AI", _font(20, bold=True), _TEXT_LIGHT)
 
 
 def _draw_centered_text(draw: ImageDraw.ImageDraw, xy, text: str, font, fill):

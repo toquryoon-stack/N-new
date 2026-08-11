@@ -88,7 +88,7 @@ async def rules_command(interaction: discord.Interaction):
 #  진행 확인 헬퍼
 # ================================================================
 
-def _seating_file(game: Game, team_ids: Optional[list] = None, center_label: str = "아발롬") -> Optional[discord.File]:
+def _seating_file(game: Game, team_ids: Optional[list] = None) -> Optional[discord.File]:
     """원탁에 둘러앉은 좌석 배치 이미지를 discord.File로 만든다.
 
     오프라인으로 원으로 둘러앉아 플레이하는 것처럼, 앉은 순서(player_order)를
@@ -102,7 +102,6 @@ def _seating_file(game: Game, team_ids: Optional[list] = None, center_label: str
             players=game.player_list,
             leader_id=game.leader.id,
             team_ids=team_ids,
-            center_label=center_label,
         )
         return discord.File(fp=buf, filename="seating.png")
     except Exception as e:
@@ -155,10 +154,7 @@ async def run_game(channel: discord.TextChannel, game: Game):
 
                 # 원정대 편성
                 embed = EmbedBuilder.team_build(game)
-                seating_file = _seating_file(
-                    game,
-                    center_label=f"퀘스트 {game.current_quest.quest_number} 편성 중",
-                )
+                seating_file = _seating_file(game)
                 if seating_file is not None:
                     embed.set_image(url="attachment://seating.png")
                     await channel.send(embed=embed, file=seating_file)
@@ -174,11 +170,7 @@ async def run_game(channel: discord.TextChannel, game: Game):
 
                 # 원정대 제안 공개
                 embed = EmbedBuilder.team_proposed(game)
-                seating_file = _seating_file(
-                    game,
-                    team_ids=game.current_team_ids,
-                    center_label=f"퀘스트 {game.current_quest.quest_number} 원정대",
-                )
+                seating_file = _seating_file(game, team_ids=game.current_team_ids)
                 if seating_file is not None:
                     embed.set_image(url="attachment://seating.png")
                     await send_and_confirm(channel, game, embed=embed, file=seating_file)
