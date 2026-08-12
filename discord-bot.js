@@ -676,7 +676,7 @@ async function giveCards(game, giver, receiver, count) {
     receiver.hand.push(card);
     given.push(card);
   }
-  logEvent(game, `${giver.name} → ${receiver.name}: [${given.join(", ")}] 전달`);
+  logEvent(game, `${giver.name} → ${receiver.name}: 카드 ${given.length}장 전달 (내용 비공개)`);
 }
 
 async function cardExchange(game) {
@@ -710,7 +710,7 @@ async function cardExchange(game) {
       greatDalmuti.hand.push(card);
     }
   }
-  logEvent(game, `${greatPeon.name}(대빈민) → ${greatDalmuti.name}(대달무리): 최고 카드 2장 헌납 [${bestCards.join(", ")}]`);
+  logEvent(game, `${greatPeon.name}(대빈민) → ${greatDalmuti.name}(대달무리): 최고 카드 2장 헌납 (내용 비공개)`);
 
   await giveCards(game, greatDalmuti, greatPeon, 2);
 
@@ -721,7 +721,7 @@ async function cardExchange(game) {
     const idx = peon.hand.indexOf(bestCard);
     peon.hand.splice(idx, 1);
     dalmuti.hand.push(bestCard);
-    logEvent(game, `${peon.name}(빈민) → ${dalmuti.name}(달무리): 최고 카드 1장 [${bestCard}]`);
+    logEvent(game, `${peon.name}(빈민) → ${dalmuti.name}(달무리): 최고 카드 1장 헌납 (내용 비공개)`);
   }
 
   await giveCards(game, dalmuti, peon, 1);
