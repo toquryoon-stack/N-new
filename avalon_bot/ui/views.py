@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 import asyncio
+import logging
 from typing import Optional, List, TYPE_CHECKING
 import discord
 from discord.ui import View, Button, Select, button, select
@@ -9,6 +10,27 @@ from discord.ui import View, Button, Select, button, select
 if TYPE_CHECKING:
     from game.game import Game
     from game.player import Player
+
+log = logging.getLogger("avalon.views")
+
+
+async def _safe_send_message(interaction: discord.Interaction, *args, **kwargs) -> None:
+    """interaction 응답 전송을 시도하되, 실패해도(예: 더블클릭 등으로 인터랙션이
+    만료되어 발생하는 'Unknown interaction' 404) 게임 진행 자체가 막히지 않도록
+    예외를 삼킨다. 상태 변경(투표 기록 등)은 항상 이 호출 이전에 끝나 있어야 한다."""
+    try:
+        await interaction.response.send_message(*args, **kwargs)
+    except discord.HTTPException as e:
+        log.warning(f"인터랙션 응답 전송 실패(무시하고 진행): {e}")
+
+
+async def _safe_edit_message(interaction: discord.Interaction, *args, **kwargs) -> None:
+    """위와 동일한 이유로, edit_message 실패도 뒤따르는 상태 전환 로직을
+    막지 않도록 예외를 삼킨다."""
+    try:
+        await interaction.response.edit_message(*args, **kwargs)
+    except discord.HTTPException as e:
+        log.warning(f"인터랙션 메시지 수정 실패(무시하고 진행): {e}")
 
 
 # ================================================================
@@ -32,10 +54,10 @@ class ConfirmView(View):
                              btn: Button):
         uid = interaction.user.id
         if uid not in self.human_ids:
-            await interaction.response.send_message("게임 참가자가 아닙니다!", ephemeral=True)
+            await _safe_send_message(interaction, "게임 참가자가 아닙니다!", ephemeral=True)
             return
         if uid in self.confirmed:
-            await interaction.response.send_message("이미 확인했습니다!", ephemeral=True)
+            await _safe_send_message(interaction, "이미 확인했습니다!", ephemeral=True)
             return
 
         self.confirmed.add(uid)
@@ -45,12 +67,12 @@ class ConfirmView(View):
         if done >= total:
             btn.label = "전원 확인 완료!"
             btn.disabled = True
-            await interaction.response.edit_message(view=self)
+            await _safe_edit_message(interaction, view=self)
             self.all_confirmed.set()
             self.stop()
         else:
             btn.label = f"확인 ({done}/{total})"
-            await interaction.response.edit_message(view=self)
+            await _safe_edit_message(interaction, view=self)
 
     async def on_timeout(self) -> None:
         for child in self.children:
@@ -74,75 +96,75 @@ class LobbyView(View):
     async def join_button(self, interaction: discord.Interaction, btn: Button):
         if self.game.add_player(interaction.user):
             from .embeds import EmbedBuilder
-            await interaction.response.edit_message(
+            await _safe_edit_message(interaction,
                 embed=EmbedBuilder.lobby(self.game), view=self
             )
         else:
-            await interaction.response.send_message(
+            await _safe_send_message(interaction,
                 "이미 참가했거나 인원이 가득 찼습니다!", ephemeral=True
             )
 
     @button(label="퇴장", style=discord.ButtonStyle.grey, emoji="🚪")
     async def leave_button(self, interaction: discord.Interaction, btn: Button):
         if interaction.user == self.game.host:
-            await interaction.response.send_message(
+            await _safe_send_message(interaction,
                 "호스트는 퇴장할 수 없습니다!", ephemeral=True
             )
             return
         if self.game.remove_player(interaction.user.id):
             from .embeds import EmbedBuilder
-            await interaction.response.edit_message(
+            await _safe_edit_message(interaction,
                 embed=EmbedBuilder.lobby(self.game), view=self
             )
         else:
-            await interaction.response.send_message(
+            await _safe_send_message(interaction,
                 "참가하지 않았습니다!", ephemeral=True
             )
 
     @button(label="AI 추가", style=discord.ButtonStyle.blurple, emoji="🤖")
     async def add_ai_button(self, interaction: discord.Interaction, btn: Button):
         if interaction.user != self.game.host:
-            await interaction.response.send_message(
+            await _safe_send_message(interaction,
                 "호스트만 AI를 추가할 수 있습니다!", ephemeral=True
             )
             return
         ai_player = self.game.add_ai_player()
         if ai_player:
             from .embeds import EmbedBuilder
-            await interaction.response.edit_message(
+            await _safe_edit_message(interaction,
                 embed=EmbedBuilder.lobby(self.game), view=self
             )
         else:
-            await interaction.response.send_message(
+            await _safe_send_message(interaction,
                 "인원이 가득 찼습니다!", ephemeral=True
             )
 
     @button(label="AI 제거", style=discord.ButtonStyle.grey, emoji="❌")
     async def remove_ai_button(self, interaction: discord.Interaction, btn: Button):
         if interaction.user != self.game.host:
-            await interaction.response.send_message(
+            await _safe_send_message(interaction,
                 "호스트만 AI를 제거할 수 있습니다!", ephemeral=True
             )
             return
         if self.game.remove_ai_player():
             from .embeds import EmbedBuilder
-            await interaction.response.edit_message(
+            await _safe_edit_message(interaction,
                 embed=EmbedBuilder.lobby(self.game), view=self
             )
         else:
-            await interaction.response.send_message(
+            await _safe_send_message(interaction,
                 "제거할 AI가 없습니다!", ephemeral=True
             )
 
     @button(label="게임 시작", style=discord.ButtonStyle.red, emoji="🏰")
     async def start_button(self, interaction: discord.Interaction, btn: Button):
         if interaction.user != self.game.host:
-            await interaction.response.send_message(
+            await _safe_send_message(interaction,
                 "호스트만 게임을 시작할 수 있습니다!", ephemeral=True
             )
             return
         if not self.game.can_start():
-            await interaction.response.send_message(
+            await _safe_send_message(interaction,
                 f"최소 {self.game.player_count}명 중 {5}명이 필요합니다!", ephemeral=True
             )
             return
@@ -150,7 +172,7 @@ class LobbyView(View):
         for item in self.children:
             item.disabled = True
         from .embeds import EmbedBuilder
-        await interaction.response.edit_message(
+        await _safe_edit_message(interaction,
             embed=EmbedBuilder.lobby(self.game), view=self
         )
         self.stop()
@@ -196,7 +218,7 @@ class TeamSelectView(View):
     async def _select_callback(self, interaction: discord.Interaction):
         # 리더만 선택 가능
         if interaction.user.id != self.game.leader.id:
-            await interaction.response.send_message(
+            await _safe_send_message(interaction,
                 "리더만 원정대를 편성할 수 있습니다!", ephemeral=True
             )
             return
@@ -207,7 +229,7 @@ class TeamSelectView(View):
         names = [self.game.players[pid].name for pid in self.selected_ids]
         for item in self.children:
             item.disabled = True
-        await interaction.response.edit_message(
+        await _safe_edit_message(interaction,
             content=f"✅ 원정대: {', '.join(names)}",
             view=self,
         )
@@ -239,12 +261,12 @@ class TeamVoteView(View):
     async def _handle_vote(self, interaction: discord.Interaction, vote_type: str):
         pid = interaction.user.id
         if pid not in self.game.players:
-            await interaction.response.send_message(
+            await _safe_send_message(interaction,
                 "게임 참가자가 아닙니다!", ephemeral=True
             )
             return
         if pid in self._voted_ids:
-            await interaction.response.send_message(
+            await _safe_send_message(interaction,
                 "이미 투표했습니다!", ephemeral=True
             )
             return
@@ -256,7 +278,7 @@ class TeamVoteView(View):
         self.votes_received += 1
 
         remaining = self.game.player_count - self.votes_received
-        await interaction.response.send_message(
+        await _safe_send_message(interaction,
             f"✅ 투표 완료! (남은 인원: {remaining}명)", ephemeral=True
         )
 
@@ -296,13 +318,13 @@ class RoleCheckView(View):
                 player = p
                 break
         if not player:
-            await interaction.response.send_message(
+            await _safe_send_message(interaction,
                 "게임 참가자가 아닙니다!", ephemeral=True
             )
             return
         from .embeds import EmbedBuilder
         embed = EmbedBuilder.night_role_dm(player, self.game.player_list)
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await _safe_send_message(interaction, embed=embed, ephemeral=True)
 
 
 # ================================================================
@@ -334,12 +356,12 @@ class QuestVoteChannelView(View):
     async def _cast_vote(self, interaction: discord.Interaction, success: bool):
         uid = interaction.user.id
         if uid not in self.team_ids:
-            await interaction.response.send_message(
+            await _safe_send_message(interaction,
                 "퀘스트 팀원이 아닙니다!", ephemeral=True
             )
             return
         if uid in self.votes:
-            await interaction.response.send_message(
+            await _safe_send_message(interaction,
                 "이미 투표했습니다!", ephemeral=True
             )
             return
@@ -348,7 +370,7 @@ class QuestVoteChannelView(View):
 
         # 선의 진영은 성공만 선택 가능
         if not success and player.is_good:
-            await interaction.response.send_message(
+            await _safe_send_message(interaction,
                 "선의 진영은 성공만 선택할 수 있습니다!", ephemeral=True
             )
             return
@@ -358,7 +380,7 @@ class QuestVoteChannelView(View):
         remaining = len(self.human_team_ids) - sum(
             1 for pid in self.human_team_ids if pid in self.votes
         )
-        await interaction.response.send_message(
+        await _safe_send_message(interaction,
             f"{emoji} 카드를 냈습니다! (남은 제출: {remaining}명)",
             ephemeral=True,
         )
@@ -420,7 +442,7 @@ class AssassinSelectView(View):
     async def _select_callback(self, interaction: discord.Interaction):
         assassin = self.game.get_assassin()
         if assassin and interaction.user.id != assassin.id:
-            await interaction.response.send_message(
+            await _safe_send_message(interaction,
                 "암살자만 지목할 수 있습니다!", ephemeral=True
             )
             return
@@ -431,7 +453,7 @@ class AssassinSelectView(View):
 
         for item in self.children:
             item.disabled = True
-        await interaction.response.edit_message(
+        await _safe_edit_message(interaction,
             content=f"🗡️ **{target.name}**을(를) 멀린으로 지목했습니다!",
             view=self,
         )
@@ -454,7 +476,7 @@ class GameOverView(View):
         self.restart = True
         for item in self.children:
             item.disabled = True
-        await interaction.response.edit_message(
+        await _safe_edit_message(interaction,
             content="🔄 새 게임을 시작하려면 `/아발롬` 명령어를 사용하세요!",
             view=self,
         )

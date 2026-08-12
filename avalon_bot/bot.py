@@ -88,17 +88,22 @@ async def rules_command(interaction: discord.Interaction):
 #  진행 확인 헬퍼
 # ================================================================
 
-def _seating_file(game: Game, team_ids: Optional[list] = None) -> Optional[discord.File]:
+async def _seating_file(game: Game, team_ids: Optional[list] = None) -> Optional[discord.File]:
     """원탁에 둘러앉은 좌석 배치 이미지를 discord.File로 만든다.
 
     오프라인으로 원으로 둘러앉아 플레이하는 것처럼, 앉은 순서(player_order)를
     12시 방향부터 시계 방향으로 배치하고 현재 리더를 금색으로 강조한다.
 
+    PIL로 그림을 그리는 작업은 CPU 작업이라 이벤트 루프를 그대로 막아버리면
+    그 사이 들어오는 버튼 클릭 등의 인터랙션 응답이 늦어져 디스코드가
+    "Unknown interaction"으로 거부할 수 있다. 그래서 별도 스레드에서 실행한다.
+
     이미지 생성이 실패해도(폰트 누락 등) 게임 자체가 멈추면 안 되므로,
     실패 시 None을 반환하고 호출부에서 이미지 없이 계속 진행한다.
     """
     try:
-        buf = render_seating_circle(
+        buf = await asyncio.to_thread(
+            render_seating_circle,
             players=game.player_list,
             leader_id=game.leader.id,
             team_ids=team_ids,
@@ -154,7 +159,7 @@ async def run_game(channel: discord.TextChannel, game: Game):
 
                 # 원정대 편성
                 embed = EmbedBuilder.team_build(game)
-                seating_file = _seating_file(game)
+                seating_file = await _seating_file(game)
                 if seating_file is not None:
                     embed.set_image(url="attachment://seating.png")
                     await channel.send(embed=embed, file=seating_file)
@@ -170,7 +175,7 @@ async def run_game(channel: discord.TextChannel, game: Game):
 
                 # 원정대 제안 공개
                 embed = EmbedBuilder.team_proposed(game)
-                seating_file = _seating_file(game, team_ids=game.current_team_ids)
+                seating_file = await _seating_file(game, team_ids=game.current_team_ids)
                 if seating_file is not None:
                     embed.set_image(url="attachment://seating.png")
                     await send_and_confirm(channel, game, embed=embed, file=seating_file)
