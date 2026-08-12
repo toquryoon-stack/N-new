@@ -174,6 +174,20 @@ def _weighted_order_by_trust(ids: List[int], trust: Dict[int, float]) -> List[in
     return sorted(ids, key=sort_key)
 
 
+def _early_game_skepticism(quest_history: List[dict]) -> float:
+    """게임 초반에는 뚜렷한 근거 없이도 원정대를 더 자주 반대하게 만드는
+    보정값. 아직 완료된 퀘스트가 없으면(즉 첫 퀘스트 편성 단계) 여러 번
+    재편성을 거치도록 유도해 다른 플레이어들의 투표 패턴을 관찰할 기회를
+    만든다. 퀘스트가 쌓일수록(=검증할 자료가 쌓일수록) 원래 성향으로 돌아온다.
+    """
+    completed = len(quest_history)
+    if completed == 0:
+        return 0.30
+    if completed == 1:
+        return 0.10
+    return 0.0
+
+
 def _percival_guess_merlin_id(
     candidate_ids: List[int],
     quest_history: List[dict],
@@ -345,6 +359,7 @@ class AIStrategy:
         all_players: List[Player],
         rejection_count: int,
         quest_history: List[dict],
+        leader_id: Optional[int] = None,
     ) -> Vote:
         """원정대에 대한 투표를 결정한다."""
 
@@ -378,6 +393,22 @@ class AIStrategy:
             # 확정된 악이 팀에 있다면 그 무엇보다 우선해서 반대한다
             if any(pid in confirmed_evil for pid in team_ids):
                 return Vote.REJECT if random.random() < 0.97 else Vote.APPROVE
+
+            # 인원수만으로도 확정할 수 있는 경우: 내가 선인데 이 원정대에
+            # 빠져 있고, 남은 선 인원만으로는 이 팀 크기를 채울 수 없다면
+            # (비둘기집 원리) 그 팀에는 무조건 악이 껴 있다는 뜻이다.
+            # 예: 5인 게임(선3/악2)에서 나를 뺀 3인 원정대는 나를 제외한
+            # 선이 2명뿐이므로 반드시 악이 최소 1명 포함된다.
+            if player.id not in team_ids:
+                good_count, _evil_count = cfg.TEAM_COMPOSITION.get(len(all_players), (0, 0))
+                other_good_available = good_count - 1
+                if good_count and len(team_ids) > other_good_available:
+                    return Vote.REJECT if random.random() < 0.95 else Vote.APPROVE
+
+            # 내가 이 원정대를 짠 리더라면, 이미 스스로 고민해서 구성한
+            # 팀이므로 반대할 이유가 거의 없다 (역할별 판단보다 우선).
+            if leader_id is not None and player.id == leader_id:
+                return Vote.APPROVE if random.random() < 0.92 else Vote.REJECT
 
             # 멀린: 자신이 아는 악(모드레드는 안 보임)이 팀에 있는지로 판단
             if player.role == Role.MERLIN:
@@ -420,7 +451,13 @@ class AIStrategy:
             if trusted_in_team >= 2:
                 return Vote.APPROVE if random.random() < 0.85 else Vote.REJECT
 
-            return Vote.APPROVE if random.random() < 0.6 else Vote.REJECT
+            # 뚜렷한 근거가 없을 때의 기본 성향. 게임 초반에는 아직 아무런
+            # 검증(투표 기록)도 없는 상태이므로, 너무 쉽게 찬성해버리면
+            # 여러 번 재편성을 거치며 서로의 투표 패턴을 관찰할 기회 자체가
+            # 사라진다. 그래서 초반일수록 더 신중하게(자주 반대) 판단하다가,
+            # 퀘스트 기록이 쌓일수록 원래 성향으로 돌아온다.
+            approve_prob = 0.6 - _early_game_skepticism(quest_history)
+            return Vote.APPROVE if random.random() < approve_prob else Vote.REJECT
 
     # ================================================================
     #  퀘스트 수행 (성공/실패)

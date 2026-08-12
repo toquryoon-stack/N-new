@@ -316,6 +316,7 @@ async def team_vote_phase(channel: discord.TextChannel, game: Game):
                 all_players=game.player_list,
                 rejection_count=game.rejection_count,
                 quest_history=game.quest_history,
+                leader_id=game.leader.id,
             )
             game.cast_team_vote(p.id, vote)
 
