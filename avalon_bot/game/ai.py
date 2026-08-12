@@ -22,6 +22,7 @@ if TYPE_CHECKING:
 
 from .enums import Role, Team, Vote, QuestVote
 from .roles import get_team
+import config as cfg
 
 
 # ── AI 이름 풀 ──
@@ -94,23 +95,31 @@ def _score_merlin_candidates(
     단서: 실패한 퀘스트에 반대표를 던졌다면 멀린일 가능성이 높고
     (실제 멀린은 악이 낀 팀을 미리 알아채고 반대하는 경향이 있음),
     성공한 퀘스트에 찬성표를 던진 것도 약한 단서로 취급한다.
-    완전한 확신은 주지 않도록 무작위성을 더한다.
+    또한 실제로 그 퀘스트에 참여해서 성공/실패시켰는지도 참고한다
+    (성공한 원정대에 있었으면 멀린 쪽에, 실패한 원정대에 있었으면
+    모르가나 쪽에 조금 더 무게를 둔다). 완전한 확신은 주지 않도록
+    무작위성을 더한다.
     """
     score: Dict[int, float] = {pid: 0.0 for pid in candidate_ids}
 
     for hist in quest_history:
         result = hist.get("result")
         votes = hist.get("team_votes", {})
+        team_ids = hist.get("team_ids", [])
 
         for pid in candidate_ids:
             vote = votes.get(pid)
-            if vote is None:
-                continue
+            if vote is not None:
+                if result == "실패" and vote == "반대":
+                    score[pid] += 1.5
+                elif result == "성공" and vote == "찬성":
+                    score[pid] += 0.4
 
-            if result == "실패" and vote == "반대":
-                score[pid] += 1.5
-            elif result == "성공" and vote == "찬성":
-                score[pid] += 0.4
+            if pid in team_ids:
+                if result == "성공":
+                    score[pid] += 0.6
+                elif result == "실패":
+                    score[pid] -= 0.8
 
     # 퍼시벌은 확신할 수 없으므로 약간의 불확실성을 더한다.
     for pid in score:
@@ -134,6 +143,35 @@ def _get_confirmed_evil_ids(quest_history: List[dict]) -> set:
         if len(team_ids) == 2 and hist.get("fail_count", 0) == 2:
             confirmed.update(team_ids)
     return confirmed
+
+
+def _success_trust_scores(quest_history: List[dict]) -> Dict[int, float]:
+    """성공한 원정대에 있었던 플레이어일수록 선일 가능성이 높다고 보고
+    신뢰 점수를 준다 (같은 조합을 다시 구성하는 데 쓰인다).
+
+    단, 악이 교묘하게 성공한 척 속이는 경우도 있으므로 이건 어디까지나
+    '가능성이 높다'는 힌트일 뿐 확정적인 증거는 아니다.
+    """
+    trust: Dict[int, float] = {}
+    for hist in quest_history:
+        if hist.get("result") != "성공":
+            continue
+        for pid in hist.get("team_ids", []):
+            trust[pid] = trust.get(pid, 0.0) + 1.0
+    return trust
+
+
+def _weighted_order_by_trust(ids: List[int], trust: Dict[int, float]) -> List[int]:
+    """신뢰 점수가 높은 사람이 뒤쪽(=먼저 pop되는 쪽)에 오도록 정렬한다.
+
+    확정이 아니라 '확률을 높이는' 수준이어야 하므로 무작위성을 충분히 섞는다.
+    """
+    # 오름차순 정렬 후 pop()으로 뒤에서부터 꺼내 쓰므로, 신뢰 점수가 높을수록
+    # 정렬 키도 커지게(=리스트 뒤쪽에 오게) 만든다.
+    def sort_key(pid: int) -> float:
+        return random.random() + trust.get(pid, 0.0) * 0.35
+
+    return sorted(ids, key=sort_key)
 
 
 def _percival_guess_merlin_id(
@@ -179,6 +217,9 @@ class AIStrategy:
         """
         player_ids = [p.id for p in all_players]
         confirmed_evil = _get_confirmed_evil_ids(quest_history)
+        # 과거에 성공한 원정대에 있었던 사람일수록 선일 확률이 높다고 보고
+        # (교묘하게 속인 악일 수도 있으니 절대적이진 않다) 우선 고려한다.
+        trust = _success_trust_scores(quest_history)
 
         if leader.is_evil:
             # ── 악 리더 전략 ──
@@ -224,7 +265,7 @@ class AIStrategy:
                     p.id for p in all_players
                     if p.id != leader.id and p.id not in known_evil
                 ]
-                random.shuffle(believed_good)
+                believed_good = _weighted_order_by_trust(believed_good, trust)
 
                 # 90% 확률로 아는 악만 피해서 넣기 (10%는 일부러 섞어서 정체 숨기기)
                 if random.random() < 0.9:
@@ -249,12 +290,12 @@ class AIStrategy:
                 if believed_merlin is not None:
                     team.append(believed_merlin)
 
-                # 확정된 악은 최대한 피해서 나머지를 채운다
+                # 확정된 악은 최대한 피해서 나머지를 채운다 (성공한 조합 우선)
                 others = [
                     p.id for p in all_players
                     if p.id not in team and p.id not in confirmed_evil
                 ]
-                random.shuffle(others)
+                others = _weighted_order_by_trust(others, trust)
                 while len(team) < team_size and others:
                     team.append(others.pop())
 
@@ -265,13 +306,14 @@ class AIStrategy:
                     team.append(last_resort.pop())
 
             else:
-                # 충신: 투표 기록으로 의심되는 사람은 피하고, 확정된 악은 절대 피함
+                # 충신: 투표 기록으로 의심되는 사람은 피하고, 확정된 악은 절대 피함.
+                # 과거에 함께 성공시킨 조합이 있으면 그 사람들을 우선 다시 부른다.
                 suspicious = _get_suspicious_ids(quest_history, all_players)
                 safe = [
                     p.id for p in all_players
                     if p.id != leader.id and p.id not in suspicious
                 ]
-                random.shuffle(safe)
+                safe = _weighted_order_by_trust(safe, trust)
                 while len(team) < team_size and safe:
                     team.append(safe.pop())
 
@@ -370,6 +412,14 @@ class AIStrategy:
             suspicious_in_team = any(pid in team_ids for pid in suspicious)
             if suspicious_in_team:
                 return Vote.REJECT if random.random() < 0.65 else Vote.APPROVE
+
+            # 과거에 성공시킨 원정대원이 여럿 겹치면 그만큼 신뢰도를 높인다.
+            # (다만 악이 성공한 척 속였을 수도 있으니 100%는 아니다)
+            trust = _success_trust_scores(quest_history)
+            trusted_in_team = sum(1 for pid in team_ids if trust.get(pid, 0) > 0)
+            if trusted_in_team >= 2:
+                return Vote.APPROVE if random.random() < 0.85 else Vote.REJECT
+
             return Vote.APPROVE if random.random() < 0.6 else Vote.REJECT
 
     # ================================================================
@@ -396,6 +446,13 @@ class AIStrategy:
             if p.id in team_ids and p.is_evil and p.id != player.id
         ]
 
+        # 이번 퀘스트가 실패하면 곧바로 악의 승리가 확정되는 상황(이미 실패 2개)
+        # 이라면, 정체를 숨기는 것보다 승리가 훨씬 중요하므로 무조건 실패를 낸다.
+        # (게임이 그 즉시 끝나버리므로 나중에 들통날 걱정을 할 필요가 없다.)
+        game_deciding = fail_count >= cfg.QUESTS_TO_WIN - 1
+        if game_deciding:
+            return QuestVote.FAIL
+
         # 2인 원정대에 악이 둘(자신 포함) 있으면, 둘 다 실패를 내는 순간
         # "실패 2개 = 둘 다 악"이라는 사실이 그대로 공개되어 정체가 탄로난다.
         # 따라서 반드시 한 명만 실패 담당을 맡도록 조율한다 (id가 작은 쪽 담당).
@@ -408,10 +465,6 @@ class AIStrategy:
         # 초반에는 성공으로 위장할 수도 있음
         if quest_number == 1 and random.random() < 0.3:
             return QuestVote.SUCCESS  # 30% 확률로 1차 퀘스트 위장
-
-        # 이미 2개 실패했으면 성공해서 의심 피하기
-        if fail_count >= 2 and random.random() < 0.4:
-            return QuestVote.SUCCESS
 
         # 기본적으로 실패, 하지만 매번 확정적이지 않도록 약간의 성공도 섞는다
         return QuestVote.SUCCESS if random.random() < 0.15 else QuestVote.FAIL
