@@ -25,6 +25,15 @@ COLOR_ASSASSIN = 0x8E44AD    # 보라 - 암살
 COLOR_GOOD_WIN = 0xF1C40F    # 금색 - 선 승리
 COLOR_EVIL_WIN = 0xC0392B    # 암적 - 악 승리
 
+# ── 디스코드 "ansi" 코드블록 색상 (데스크톱 클라이언트에서 실제 색으로 렌더링됨) ──
+ANSI_RESET = "\x1b[0m"
+ANSI_BOLD_RED = "\x1b[1;31m"
+ANSI_BOLD_BLUE = "\x1b[1;34m"
+
+
+def _ansi_block(text: str) -> str:
+    return "```ansi\n" + text + "\n```"
+
 
 class EmbedBuilder:
     """게임 상태별 Embed 생성"""
@@ -271,19 +280,19 @@ class EmbedBuilder:
                 color=COLOR_QUEST_FAIL,
             )
 
-        # 개별 투표 공개
+        # 개별 투표 공개 (찬성 O=파랑, 반대 X=빨강)
         vote_lines = []
         for pid in game.player_order:
             p = game.players[pid]
             v = quest.team_votes.get(pid)
             if v == Vote.APPROVE:
-                vote_lines.append(f"**O** {p.name}")
+                vote_lines.append(f"{ANSI_BOLD_BLUE}O {p.name}{ANSI_RESET}")
             elif v == Vote.REJECT:
-                vote_lines.append(f"**X** {p.name}")
+                vote_lines.append(f"{ANSI_BOLD_RED}X {p.name}{ANSI_RESET}")
 
         embed.add_field(
             name="투표 결과",
-            value="\n".join(vote_lines),
+            value=_ansi_block("\n".join(vote_lines)),
             inline=False,
         )
 
