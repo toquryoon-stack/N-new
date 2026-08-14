@@ -190,6 +190,7 @@ async function lobbyStart(interaction) {
   }
   const aiCount = Math.max(0, lobby.total - players.length);
   for (let i = 0; i < aiCount; i++) players.push(new AIPlayer(`AI-${i + 1}`));
+  shuffle(players); // 사람이 항상 먼저 나오지 않도록 순서(자리)를 섞음
 
   const game = {
     channel: lobby.channel,
