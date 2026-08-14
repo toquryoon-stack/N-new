@@ -419,17 +419,32 @@ class AIStrategy:
             if leader_id is not None and player.id == leader_id:
                 return Vote.APPROVE if random.random() < 0.92 else Vote.REJECT
 
-            # 멀린: 자신이 아는 악(모드레드는 안 보임)이 팀에 있는지로 판단
+            # 멀린: 자신이 아는 악(모드레드는 안 보임)이 팀에 있는지로 판단.
+            # 다만 매 투표마다 "실패한 팀엔 반대, 성공한 팀엔 찬성"을 너무 정확히
+            # 반복하면 그 상관관계만으로 정체가 드러난다. 그래서 게임이 걸린
+            # 순간이 아니면 판단을 일부러 흐려서 패턴 자체를 숨긴다.
             if player.role == Role.MERLIN:
                 known_evil = _merlin_known_evil_ids(all_players)
                 evil_in_team = any(pid in known_evil for pid in team_ids)
-                if evil_in_team:
-                    # 반대하되, 너무 정확하면 들킴
-                    return Vote.REJECT if random.random() < 0.8 else Vote.APPROVE
-                else:
-                    # 아는 악이 하나도 없다면(=팀이 전부 선) 사실상 확실한 정보이므로
-                    # 거의 확실하게 찬성한다 (아주 가끔만 헷갈리게 반대)
+                game_deciding = completed_fail_count >= cfg.QUESTS_TO_WIN - 1
+
+                if game_deciding:
+                    # 악이 한 번만 더 실패시키면 지는 상황에서는 들킬 위험보다
+                    # 승리가 훨씬 중요하므로 아는 정보를 분명하게 활용한다.
+                    if evil_in_team:
+                        return Vote.REJECT if random.random() < 0.85 else Vote.APPROVE
                     return Vote.APPROVE if random.random() < 0.95 else Vote.REJECT
+
+                # 평소에는 가끔(20%) 아는 정보를 일부러 무시하고, 정보가 없는
+                # 평범한 선과 똑같은 기준으로 판단해서 투표 패턴에 잡음을 섞는다.
+                if random.random() < 0.2:
+                    base = 0.6 - _early_game_skepticism(quest_history)
+                    return Vote.APPROVE if random.random() < base else Vote.REJECT
+
+                if evil_in_team:
+                    return Vote.REJECT if random.random() < 0.6 else Vote.APPROVE
+                else:
+                    return Vote.APPROVE if random.random() < 0.75 else Vote.REJECT
 
             # 퍼시벌: 진짜 멀린이라 판단되는 사람이 팀에 있는지로 판단
             if player.role == Role.PERCIVAL:

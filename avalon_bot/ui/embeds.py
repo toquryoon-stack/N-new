@@ -277,9 +277,9 @@ class EmbedBuilder:
             p = game.players[pid]
             v = quest.team_votes.get(pid)
             if v == Vote.APPROVE:
-                vote_lines.append(f"👍 {p.name}")
+                vote_lines.append(f"**O** {p.name}")
             elif v == Vote.REJECT:
-                vote_lines.append(f"👎 {p.name}")
+                vote_lines.append(f"**X** {p.name}")
 
         embed.add_field(
             name="투표 결과",
