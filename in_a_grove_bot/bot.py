@@ -188,7 +188,7 @@ async def run_game(channel: discord.TextChannel, game: Game):
                 return
 
             # ── 9) 다음 라운드 대기 ──
-            next_view = NextRoundView(host_id=game.host.id)
+            next_view = NextRoundView(game, host_id=game.host.id)
             await channel.send(
                 "▶️ 다음 라운드를 시작하려면 호스트가 버튼을 눌러주세요!",
                 view=next_view,

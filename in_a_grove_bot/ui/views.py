@@ -10,6 +10,29 @@ if TYPE_CHECKING:
     from game.game import Game
 
 
+def attach_my_hand_button(view: View, game: Game) -> None:
+    """view에 '내 패 보기' 버튼을 추가한다.
+
+    슬래시 명령어 없이도, 게임 진행 중 뜨는 버튼 메시지마다 이 버튼이
+    항상 같이 붙어있어서 참가자가 언제든 자기 타일 정보를 다시 볼 수
+    있다."""
+    btn = Button(label="🃏 내 패 보기", style=discord.ButtonStyle.gray)
+
+    async def callback(interaction: discord.Interaction):
+        player = game.players.get(interaction.user.id)
+        if not player or player.is_ai:
+            await interaction.response.send_message(
+                "이 게임에 참가하지 않았습니다!", ephemeral=True
+            )
+            return
+        from .embeds import EmbedBuilder
+        embed = EmbedBuilder.my_tiles(player, game)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    btn.callback = callback
+    view.add_item(btn)
+
+
 # ================================================================
 #  로비 뷰
 # ================================================================
@@ -123,6 +146,7 @@ class AckView(View):
         self.pending_ids = {p.id for p in game.player_list if not p.is_ai}
         self.acked_ids: set = set()
         self._update_label()
+        attach_my_hand_button(self, game)
 
     def _update_label(self):
         self.children[0].label = f"✅ 확인 ({len(self.acked_ids)}/{len(self.pending_ids)})"
@@ -309,6 +333,7 @@ class DiscovererStartView(View):
         self.done = False
         self.chosen_indices: List[int] = []
         self.swapped = False
+        attach_my_hand_button(self, game)
 
     @button(label="수사 시작", style=discord.ButtonStyle.blurple, emoji="🔍")
     async def start_button(self, interaction: discord.Interaction, btn: Button):
@@ -389,6 +414,7 @@ class SuspectPeekView(View):
         self.game = game
         self.accuser_id = accuser_id
         self.done = False
+        attach_my_hand_button(self, game)
 
     @button(label="남은 용의자 확인", style=discord.ButtonStyle.blurple, emoji="🔍")
     async def peek_button(self, interaction: discord.Interaction, btn: Button):
@@ -423,6 +449,7 @@ class AccusationView(View):
         self.game = game
         self.chosen_idx: Optional[int] = None
         self.done = False
+        attach_my_hand_button(self, game)
 
     @button(label="용의자 1", style=discord.ButtonStyle.danger, emoji="1️⃣")
     async def accuse_1(self, interaction: discord.Interaction, btn: Button):
@@ -465,10 +492,11 @@ class AccusationView(View):
 class NextRoundView(View):
     """라운드 종료 후 다음 라운드 진행"""
 
-    def __init__(self, host_id: int, timeout: float = 120):
+    def __init__(self, game: Game, host_id: int, timeout: float = 120):
         super().__init__(timeout=timeout)
         self.host_id = host_id
         self.proceed = False
+        attach_my_hand_button(self, game)
 
     @button(label="다음 라운드", style=discord.ButtonStyle.green, emoji="▶️")
     async def next_round_button(self, interaction: discord.Interaction, btn: Button):
