@@ -111,23 +111,23 @@ def render_board(
         show_values: True면 각 용의자 위에 실제 타일 번호를 표시 (공개 후)
         murderer_idx: 공개 후 범인 인덱스 (있으면 강조 표시)
     """
-    W, H = 900, 760
+    W, H = 1200, 1080
     canvas = Image.new("RGB", (W, H), BG_COLOR)
     draw = ImageDraw.Draw(canvas)
 
     person_template = _draw_person()
     suspect_sprite = _tint(person_template, FIGURE_COLOR)
 
-    num_font = _load_font(40)
-    tag_font = _load_font(18)
+    num_font = _load_font(56)
+    tag_font = _load_font(28)
 
     # ── 용의자 3명 배치 ──
-    suspect_w, suspect_h = 190, 230
+    suspect_w, suspect_h = 270, 330
     suspect_sprite_resized = suspect_sprite.resize((suspect_w, suspect_h))
-    gap = 60
+    gap = 80
     total_w = suspect_w * 3 + gap * 2
     start_x = (W - total_w) // 2
-    top_y = 80
+    top_y = 110
 
     positions = []
     for i in range(3):
@@ -139,10 +139,10 @@ def render_board(
 
         # 범인 강조 배경 (공개 후)
         if is_murderer:
-            pad = 18
+            pad = 24
             draw.rounded_rectangle(
                 [x - pad, top_y - pad, x + suspect_w + pad, top_y + suspect_h + pad],
-                radius=24, outline=(220, 30, 30), width=8,
+                radius=32, outline=(220, 30, 30), width=10,
             )
 
         canvas.paste(suspect_sprite_resized, (x, top_y), suspect_sprite_resized)
@@ -154,28 +154,28 @@ def render_board(
         else:
             label = str(i + 1)
 
-        badge_r = 30
+        badge_r = 42
         badge_cx = x + suspect_w // 2
-        badge_cy = top_y - 20
+        badge_cy = top_y - 28
         badge_color = (220, 30, 30) if is_murderer else WHITE
         text_color = WHITE if is_murderer else FIGURE_COLOR
         draw.ellipse(
             [badge_cx - badge_r, badge_cy - badge_r, badge_cx + badge_r, badge_cy + badge_r],
-            fill=badge_color, outline=FIGURE_COLOR, width=3,
+            fill=badge_color, outline=FIGURE_COLOR, width=4,
         )
         _draw_centered_text(draw, (badge_cx, badge_cy), label, num_font, text_color)
 
         # 발견자가 확인하지 않은 용의자 표시 (실물 게임처럼, 안 뒤집은 카드가 표시남)
         if is_unseen:
-            mark_cx, mark_cy = x + suspect_w - 10, top_y - 10
-            _draw_magnifier(draw, (mark_cx, mark_cy), 22, GOLD)
+            mark_cx, mark_cy = x + suspect_w - 14, top_y - 14
+            _draw_magnifier(draw, (mark_cx, mark_cy), 30, GOLD)
 
     # ── 고발 마커 (플레이어 색 이름표, 용의자 발밑에서 위로 쌓임 = 실제 스택과 동일) ──
     suspect_bottom = top_y + suspect_h
-    tag_base_y = suspect_bottom + 55
-    tag_h = 30
-    tag_spacing = tag_h + 6
-    tag_max_w = suspect_w + 30
+    tag_base_y = suspect_bottom + 70
+    tag_h = 46
+    tag_spacing = tag_h + 8
+    tag_max_w = suspect_w + 50
 
     for i, x in enumerate(positions):
         stack = game.accusation_stacks.get(i, [])
@@ -197,22 +197,22 @@ def render_board(
             )
 
     # ── 피해자 (눕혀서, 아래쪽) ──
-    victim_w = 150
+    victim_w = 210
     victim_sprite = _tint(person_template, VICTIM_COLOR)
     victim_sprite = victim_sprite.resize(
         (victim_w, int(victim_w * person_template.height / person_template.width))
     )
     victim_sprite = victim_sprite.rotate(-90, expand=True)
     vx = (W - victim_sprite.width) // 2
-    vy = max(tag_base_y + 70, H - victim_sprite.height - 40)
+    vy = max(tag_base_y + 100, H - victim_sprite.height - 50)
     canvas.paste(victim_sprite, (vx, vy), victim_sprite)
 
     # 피해자 배지 ("V" = Victim, 용의자 번호 배지와 같은 스타일)
-    badge_r = 26
-    badge_cx, badge_cy = W // 2, vy - 20
+    badge_r = 36
+    badge_cx, badge_cy = W // 2, vy - 28
     draw.ellipse(
         [badge_cx - badge_r, badge_cy - badge_r, badge_cx + badge_r, badge_cy + badge_r],
-        fill=VICTIM_COLOR, outline=WHITE, width=3,
+        fill=VICTIM_COLOR, outline=WHITE, width=4,
     )
     _draw_centered_text(draw, (badge_cx, badge_cy), "V", num_font, WHITE)
 
@@ -240,7 +240,7 @@ def _draw_name_tag(
     """플레이어 색 배경 + 흰 글씨 이름표를 그린다 (고발 마커).
     너무 긴 이름은 말줄임표로 잘라 폭을 맞춘다."""
     cx, cy = center
-    pad_x = 12
+    pad_x = 18
 
     display_text = text
     while True:
@@ -273,10 +273,10 @@ def _draw_magnifier(draw: ImageDraw.ImageDraw, center, radius, color):
     cx, cy = center
     draw.ellipse(
         [cx - radius, cy - radius, cx + radius, cy + radius],
-        outline=color, width=5,
+        outline=color, width=7,
     )
     hx, hy = cx + radius * 0.7, cy + radius * 0.7
-    draw.line([hx, hy, hx + radius * 0.7, hy + radius * 0.7], fill=color, width=6)
+    draw.line([hx, hy, hx + radius * 0.7, hy + radius * 0.7], fill=color, width=8)
 
 
 def _to_png_bytes(img: Image.Image) -> io.BytesIO:
