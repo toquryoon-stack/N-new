@@ -111,7 +111,7 @@ def render_board(
         show_values: True면 각 용의자 위에 실제 타일 번호를 표시 (공개 후)
         murderer_idx: 공개 후 범인 인덱스 (있으면 강조 표시)
     """
-    W, H = 1700, 1260
+    W, H = 1500, 1150
     canvas = Image.new("RGB", (W, H), BG_COLOR)
     draw = ImageDraw.Draw(canvas)
 
@@ -119,13 +119,13 @@ def render_board(
     suspect_sprite = _tint(person_template, FIGURE_COLOR)
 
     num_font = _load_font(70)
-    tag_font = _load_font(168)
-    tag_font_small = _load_font(114)  # 스택이 많이 쌓였을 때만 사용
+    tag_font = _load_font(84)
+    tag_font_small = _load_font(57)  # 스택이 많이 쌓였을 때만 사용
 
     # ── 용의자 3명 배치 ──
     suspect_w, suspect_h = 340, 410
     suspect_sprite_resized = suspect_sprite.resize((suspect_w, suspect_h))
-    gap = 220  # 이름표가 훨씬 커져서, 옆 용의자와 안 겹치도록 간격을 넓힘
+    gap = 140
     total_w = suspect_w * 3 + gap * 2
     start_x = (W - total_w) // 2
     top_y = 130
@@ -175,8 +175,8 @@ def render_board(
     # 이름표는 위(용의자 쪽)로만 쌓이므로, 피해자와의 간격은 태그 1개
     # 높이만 확보하면 충분하다 (스택이 몇 개든 피해자 쪽엔 영향 없음).
     suspect_bottom = top_y + suspect_h
-    tag_h = 210
-    tag_h_small = 150
+    tag_h = 105
+    tag_h_small = 75
     tag_base_y = suspect_bottom + 40 + tag_h // 2
 
     for i, x in enumerate(positions):
@@ -187,8 +187,8 @@ def render_board(
         # 칩이 많이 쌓이면 겹치지 않게 살짝 작게 그린다
         font = tag_font if len(stack) <= 3 else tag_font_small
         h = tag_h if len(stack) <= 3 else tag_h_small
-        tag_spacing = h + 16
-        tag_max_w = 480
+        tag_spacing = h + 12
+        tag_max_w = 300
         for j, pid in enumerate(stack):
             player = game.players.get(pid)
             if not player:
@@ -250,7 +250,7 @@ def _draw_name_tag(
     """플레이어 색 배경 + 흰 글씨 이름표를 그린다 (고발 마커).
     너무 긴 이름은 말줄임표로 잘라 폭을 맞춘다."""
     cx, cy = center
-    pad_x = 36
+    pad_x = 20
 
     display_text = text
     while True:
