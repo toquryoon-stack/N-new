@@ -343,19 +343,24 @@ class DiscovererStartView(View):
             )
             return
 
-        btn.disabled = True
-        await interaction.message.edit(view=self)
-
         from .embeds import EmbedBuilder
         discoverer = self.game.players[self.discoverer_id]
 
         # 1) 용의자 2명 선택 (본인에게만 보임)
+        # 상호작용에 먼저 응답한 뒤(3초 제한), 채널 메시지의 버튼
+        # 비활성화는 그 다음에 처리한다 (응답이 늦어져 실패하지 않도록).
         select_view = SuspectSelectView(timeout=60)
         await interaction.response.send_message(
             "🔍 **발견자 수사** - 확인할 용의자 2명을 선택하세요:",
             view=select_view,
             ephemeral=True,
         )
+
+        btn.disabled = True
+        try:
+            await interaction.message.edit(view=self)
+        except discord.HTTPException:
+            pass
 
         timed_out = await select_view.wait()
         if timed_out or not select_view.done:
@@ -394,6 +399,25 @@ class DiscovererStartView(View):
         self.done = True
         self.stop()
 
+    async def on_error(self, interaction: discord.Interaction, error: Exception, item) -> None:
+        import logging
+        logging.getLogger("in_a_grove").error(
+            f"DiscovererStartView 오류: {error}", exc_info=error
+        )
+        try:
+            if interaction.response.is_done():
+                await interaction.followup.send(
+                    "⚠️ 오류가 발생해 자동으로 처리됩니다.", ephemeral=True
+                )
+            else:
+                await interaction.response.send_message(
+                    "⚠️ 오류가 발생해 자동으로 처리됩니다.", ephemeral=True
+                )
+        except discord.HTTPException:
+            pass
+        # 오류로 멈추면 done=False로 두어, 호출부가 자동(AI) 처리로 넘어가게 한다.
+        self.stop()
+
 
 # ================================================================
 #  고발자 확인 뷰 (발견자 이후의 모든 고발자가, 고발 전 필수로 확인)
@@ -423,11 +447,35 @@ class SuspectPeekView(View):
         from .embeds import EmbedBuilder
         embed = EmbedBuilder.accuser_peek(viewed, self.game)
 
-        btn.disabled = True
-        await interaction.message.edit(view=self)
+        # 상호작용에 먼저 응답한 뒤(3초 제한), 채널 메시지의 버튼
+        # 비활성화는 그 다음에 처리한다.
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
+        btn.disabled = True
+        try:
+            await interaction.message.edit(view=self)
+        except discord.HTTPException:
+            pass
+
         self.done = True
+        self.stop()
+
+    async def on_error(self, interaction: discord.Interaction, error: Exception, item) -> None:
+        import logging
+        logging.getLogger("in_a_grove").error(
+            f"SuspectPeekView 오류: {error}", exc_info=error
+        )
+        try:
+            if interaction.response.is_done():
+                await interaction.followup.send(
+                    "⚠️ 오류가 발생해 자동으로 처리됩니다.", ephemeral=True
+                )
+            else:
+                await interaction.response.send_message(
+                    "⚠️ 오류가 발생해 자동으로 처리됩니다.", ephemeral=True
+                )
+        except discord.HTTPException:
+            pass
         self.stop()
 
 
