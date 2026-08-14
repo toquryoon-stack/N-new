@@ -143,15 +143,17 @@ def _draw_clockwise_arrow(draw: ImageDraw.ImageDraw, cx: int, cy: int, radius: f
     tip_x = cx + radius * math.cos(end_angle)
     tip_y = cy + radius * math.sin(end_angle)
 
+    # 화살촉의 밑변은 진행 방향(tangent)의 "뒤쪽"에 있어야 뾰족한 끝(tip)이
+    # 진행 방향을 가리킨다 - 부호를 반대로 하면 화살표가 거꾸로 보인다.
     tangent = end_angle + math.pi / 2
     head_len = width * 1.8
     left = (
-        tip_x - head_len * math.cos(tangent - math.radians(150)),
-        tip_y - head_len * math.sin(tangent - math.radians(150)),
+        tip_x + head_len * math.cos(tangent - math.radians(150)),
+        tip_y + head_len * math.sin(tangent - math.radians(150)),
     )
     right = (
-        tip_x - head_len * math.cos(tangent + math.radians(150)),
-        tip_y - head_len * math.sin(tangent + math.radians(150)),
+        tip_x + head_len * math.cos(tangent + math.radians(150)),
+        tip_y + head_len * math.sin(tangent + math.radians(150)),
     )
     draw.polygon([(tip_x, tip_y), left, right], fill=_ARROW_COLOR)
 
