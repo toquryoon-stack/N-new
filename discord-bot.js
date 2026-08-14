@@ -326,6 +326,36 @@ function autoPickGiveIndices(player, count) {
   return indices;
 }
 
+/** AI(또는 시간초과)가 제한된 후보 인덱스 중에서 count장을 고름. 조커가 아닌 강한 카드 우선 */
+function autoPickFromIndices(player, allowedIndices, count) {
+  const hand = player.hand;
+  const candidates = [...allowedIndices];
+  const chosen = [];
+  for (let i = 0; i < count && candidates.length > 0; i++) {
+    let bestPos = -1;
+    for (let j = 0; j < candidates.length; j++) {
+      const idx = candidates[j];
+      if (hand[idx] !== 13 && (bestPos === -1 || hand[idx] > hand[candidates[bestPos]])) bestPos = j;
+    }
+    if (bestPos === -1) bestPos = 0;
+    chosen.push(candidates[bestPos]);
+    candidates.splice(bestPos, 1);
+  }
+  return chosen;
+}
+
+/** 카드를 받은 사람에게만 DM으로 무엇을 받았는지 알려줌 (다른 사람에게는 비공개) */
+async function notifyReceivedCards(game, player, cards) {
+  if (player instanceof AIPlayer || !player.discordId || cards.length === 0) return;
+  const badges = cards.map((c) => cardBadge(c, ANSI.boldGreen)).join(" ");
+  try {
+    const user = await game.channel.client.users.fetch(player.discordId);
+    await user.send(`🎴 카드 교환으로 카드 ${cards.length}장을 받았습니다 (다른 사람에게는 비공개):\n${ansiBlock(badges)}`);
+  } catch (e) {
+    // DM이 막혀있으면 조용히 무시 (게임 진행에는 영향 없음)
+  }
+}
+
 // ════════════════════════════════════════
 // 화면(상태 메시지) 렌더링
 // ════════════════════════════════════════
@@ -494,9 +524,11 @@ async function openFollowSelect(interaction, game) {
 
 async function openGiveSelect(interaction, game) {
   const player = game.pending.player;
-  const { count, receiverName } = game.pending.data;
-  const options = player.hand.map((card, i) => ({
-    label: card === 13 ? "★ 조커" : `[${card}]`,
+  const { count, receiverName, allowedIndices } = game.pending.data;
+  const sourceIndices =
+    allowedIndices && allowedIndices.length > 0 ? allowedIndices : player.hand.map((_, i) => i);
+  const options = sourceIndices.map((i) => ({
+    label: player.hand[i] === 13 ? "★ 조커" : `[${player.hand[i]}]`,
     value: String(i),
   }));
   const select = new StringSelectMenuBuilder()
@@ -505,8 +537,9 @@ async function openGiveSelect(interaction, game) {
     .setMinValues(count)
     .setMaxValues(count)
     .addOptions(options);
+  const restrictNote = allowedIndices ? " (방금 받은 카드 중에서만 고를 수 있습니다)" : "";
   await interaction.reply({
-    content: `${formatHandLines(player)}\n\n${receiverName}에게 줄 카드 ${count}장을 선택하세요.`,
+    content: `${formatHandLines(player)}\n\n${receiverName}에게 줄 카드 ${count}장을 선택하세요.${restrictNote}`,
     components: [new ActionRowBuilder().addComponents(select)],
     flags: MessageFlags.Ephemeral,
   });
@@ -654,15 +687,22 @@ async function playTrick(game, leaderIdx) {
   return nextActive(game, trickWinnerIdx);
 }
 
-async function giveCards(game, giver, receiver, count) {
+/**
+ * giver가 receiver에게 count장을 줌.
+ * allowedIndices가 주어지면 giver.hand의 그 인덱스들 중에서만 골라야 함
+ * (카드 교환에서 방금 받은 카드로만 되돌려주도록 제한할 때 사용).
+ */
+async function giveCards(game, giver, receiver, count, allowedIndices = null) {
   let indices;
+  const pickAuto = () => (allowedIndices ? autoPickFromIndices(giver, allowedIndices, count) : autoPickGiveIndices(giver, count));
+
   if (giver instanceof AIPlayer) {
-    indices = autoPickGiveIndices(giver, count);
+    indices = pickAuto();
   } else {
     const giverIdx = game.players.indexOf(giver);
-    const promise = waitForPlayerAction(game, giver, "give", { count, receiverName: receiver.name }, () => {
+    const promise = waitForPlayerAction(game, giver, "give", { count, receiverName: receiver.name, allowedIndices }, () => {
       logEvent(game, `⏰ ${giver.name}님이 시간 내에 선택하지 않아 자동으로 진행합니다.`);
-      return autoPickGiveIndices(giver, count);
+      return pickAuto();
     });
     await showTurn(game, giverIdx, null, null, null, "give");
     indices = await promise;
@@ -676,6 +716,7 @@ async function giveCards(game, giver, receiver, count) {
     receiver.hand.push(card);
     given.push(card);
   }
+  await notifyReceivedCards(game, receiver, given);
   logEvent(game, `${giver.name} → ${receiver.name}: 카드 ${given.length}장 전달 (내용 비공개)`);
 }
 
@@ -710,21 +751,27 @@ async function cardExchange(game) {
       greatDalmuti.hand.push(card);
     }
   }
+  // 방금 헌납받은 카드들의 인덱스 (배열 맨 뒤에 push된 것들) - 되돌려줄 때 이 카드로만 제한
+  const tributeIndices1 = bestCards.map((_, i) => greatDalmuti.hand.length - bestCards.length + i);
+  await notifyReceivedCards(game, greatDalmuti, bestCards);
   logEvent(game, `${greatPeon.name}(대빈민) → ${greatDalmuti.name}(대달무리): 최고 카드 2장 헌납 (내용 비공개)`);
 
-  await giveCards(game, greatDalmuti, greatPeon, 2);
+  await giveCards(game, greatDalmuti, greatPeon, 2, tributeIndices1);
 
   peon.sortHand();
   let bestCard = peon.hand.find((c) => c !== 13);
   if (bestCard === undefined && peon.hand.length > 0) bestCard = peon.hand[0];
+  let tributeIndices2 = null;
   if (bestCard !== undefined) {
     const idx = peon.hand.indexOf(bestCard);
     peon.hand.splice(idx, 1);
     dalmuti.hand.push(bestCard);
+    tributeIndices2 = [dalmuti.hand.length - 1];
+    await notifyReceivedCards(game, dalmuti, [bestCard]);
     logEvent(game, `${peon.name}(빈민) → ${dalmuti.name}(달무리): 최고 카드 1장 헌납 (내용 비공개)`);
   }
 
-  await giveCards(game, dalmuti, peon, 1);
+  await giveCards(game, dalmuti, peon, 1, tributeIndices2);
 
   for (const p of game.players) p.sortHand();
   await postLog(game);
@@ -1040,4 +1087,6 @@ module.exports = {
   runGame,
   buildPublicEmbed,
   autoPickGiveIndices,
+  autoPickFromIndices,
+  notifyReceivedCards,
 };
