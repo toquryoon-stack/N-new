@@ -370,6 +370,9 @@ class AIStrategy:
         # 투표 기록으로 100% 확정된 악 (2인 원정대에서 둘 다 실패)
         confirmed_evil = _get_confirmed_evil_ids(quest_history)
 
+        completed_success_count = sum(1 for h in quest_history if h.get("result") == "성공")
+        completed_fail_count = sum(1 for h in quest_history if h.get("result") == "실패")
+
         if player.is_evil:
             # ── 악 전략 ──
             # 악은 팀에 악(자신 포함)이 있으면 원정대를 찬성해야 실패를 낼 기회가 생긴다.
@@ -386,6 +389,12 @@ class AIStrategy:
                     approve_prob = 0.65
                 return Vote.APPROVE if random.random() < approve_prob else Vote.REJECT
             else:
+                # 이번 퀘스트가 성공하면 곧바로 선의 승리가 확정되는데(이미 성공 2개)
+                # 이 팀엔 악이 하나도 없어서 실패를 낼 수가 없다. 통과시키면 그대로
+                # 게임이 끝나버리므로, 막을 수 있는 유일한 방법인 투표 거부에
+                # 최대한 매달려야 한다.
+                if completed_success_count >= cfg.QUESTS_TO_WIN - 1:
+                    return Vote.REJECT if random.random() < 0.95 else Vote.APPROVE
                 # 악이 없으면 반대 (하지만 너무 반대만 하면 의심)
                 return Vote.REJECT if random.random() < 0.7 else Vote.APPROVE
         else:
@@ -433,6 +442,12 @@ class AIStrategy:
                 )
                 if believed_merlin is not None and believed_merlin in team_ids:
                     return Vote.APPROVE if random.random() < 0.85 else Vote.REJECT
+
+            # 이번 퀘스트가 실패하면 곧바로 악의 승리가 확정되는데(이미 실패 2개)
+            # 내가 이 원정대에 없어서 안에 악이 있는지 확인할 방법이 없다면,
+            # 어설프게 믿고 넘어가기엔 결과가 너무 크므로 훨씬 더 적극적으로 반대한다.
+            if player.id not in team_ids and completed_fail_count >= cfg.QUESTS_TO_WIN - 1:
+                return Vote.REJECT if random.random() < 0.9 else Vote.APPROVE
 
             if player.id in team_ids:
                 # 자기가 팀에 있으면 찬성 경향 (뚜렷한 반대 근거가 없을 때만)
