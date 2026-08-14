@@ -345,14 +345,18 @@ function autoPickFromIndices(player, allowedIndices, count) {
 }
 
 /**
- * 카드를 받은 사람이 나중에 "받은 카드 확인" 버튼으로 대화방에서 비공개(ephemeral)로 볼 수 있도록 기록.
+ * 카드 교환으로 받았거나/뺏긴 카드를 나중에 "카드 교환 확인" 버튼으로
+ * 대화방에서 비공개(ephemeral)로 볼 수 있도록 기록.
  * DM은 사용하지 않음 - 채널의 버튼을 눌러야만 본인만 볼 수 있는 답으로 표시됨.
  */
-function recordReceivedCards(game, player, cards) {
-  if (player instanceof AIPlayer || !player.discordId || cards.length === 0) return;
-  if (!game.recentReceipts) game.recentReceipts = new Map();
-  const existing = game.recentReceipts.get(player.discordId) || [];
-  game.recentReceipts.set(player.discordId, [...existing, ...cards]);
+function recordExchangeInfo(game, player, { given, received } = {}) {
+  if (player instanceof AIPlayer || !player.discordId) return;
+  if ((!given || given.length === 0) && (!received || received.length === 0)) return;
+  if (!game.exchangeInfo) game.exchangeInfo = new Map();
+  const entry = game.exchangeInfo.get(player.discordId) || { given: [], received: [] };
+  if (given) entry.given.push(...given);
+  if (received) entry.received.push(...received);
+  game.exchangeInfo.set(player.discordId, entry);
 }
 
 // ════════════════════════════════════════
@@ -436,11 +440,11 @@ function buildActionRow(turnKind) {
   return null;
 }
 
-/** 카드 교환으로 받은 카드가 아직 남아있으면, 대화방에서 눌러 비공개로 확인할 수 있는 버튼 행 */
-function receivedCheckRow(game) {
-  if (!game.recentReceipts || game.recentReceipts.size === 0) return null;
+/** 이번 라운드 카드 교환 내역(받은/뺏긴 카드)이 있으면, 대화방에서 눌러 비공개로 확인할 수 있는 버튼 행 */
+function exchangeCheckRow(game) {
+  if (!game.exchangeInfo || game.exchangeInfo.size === 0) return null;
   return new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId("check_received").setLabel("받은 카드 확인").setStyle(ButtonStyle.Secondary)
+    new ButtonBuilder().setCustomId("check_exchange").setLabel("카드 교환 확인").setStyle(ButtonStyle.Secondary)
   );
 }
 
@@ -455,13 +459,13 @@ async function postStatus(game, embed, rows) {
 }
 
 async function postLog(game, opts = {}) {
-  const rows = [buildActionRow(null), receivedCheckRow(game)].filter(Boolean);
+  const rows = [buildActionRow(null), exchangeCheckRow(game)].filter(Boolean);
   await postStatus(game, buildPublicEmbed(game, opts), rows);
 }
 
 async function showTurn(game, currentIdx, tableRank, tableCount, tablePlayerName, turnKind) {
   const embed = buildPublicEmbed(game, { currentIdx, tableRank, tableCount, tablePlayerName });
-  const rows = [buildActionRow(turnKind), receivedCheckRow(game)].filter(Boolean);
+  const rows = [buildActionRow(turnKind), exchangeCheckRow(game)].filter(Boolean);
   await postStatus(game, embed, rows);
 }
 
@@ -723,7 +727,8 @@ async function giveCards(game, giver, receiver, count, allowedIndices = null) {
     receiver.hand.push(card);
     given.push(card);
   }
-  recordReceivedCards(game, receiver, given);
+  recordExchangeInfo(game, giver, { given });
+  recordExchangeInfo(game, receiver, { received: given });
   logEvent(game, `${giver.name} → ${receiver.name}: 카드 ${given.length}장 전달 (내용 비공개)`);
 }
 
@@ -731,7 +736,7 @@ async function cardExchange(game) {
   const n = game.players.length;
   if (n < 4 || game.rankings.length === 0) return;
 
-  game.recentReceipts = new Map(); // 이번 라운드 교환 내역만 남도록 초기화
+  game.exchangeInfo = new Map(); // 이번 라운드 교환 내역만 남도록 초기화
 
   const greatDalmuti = game.players[game.rankings[0]];
   const dalmuti = game.players[game.rankings[1]];
@@ -763,7 +768,8 @@ async function cardExchange(game) {
       greatDalmuti.hand.push(card);
     }
   }
-  recordReceivedCards(game, greatDalmuti, bestCards);
+  recordExchangeInfo(game, greatPeon, { given: bestCards });
+  recordExchangeInfo(game, greatDalmuti, { received: bestCards });
   logEvent(game, `${greatPeon.name}(대빈민) → ${greatDalmuti.name}(대달무리): 최고 카드 2장 헌납 (내용 비공개)`);
 
   await giveCards(game, greatDalmuti, greatPeon, 2, greatDalmutiOwnIndices);
@@ -777,7 +783,8 @@ async function cardExchange(game) {
     const idx = peon.hand.indexOf(bestCard);
     peon.hand.splice(idx, 1);
     dalmuti.hand.push(bestCard);
-    recordReceivedCards(game, dalmuti, [bestCard]);
+    recordExchangeInfo(game, peon, { given: [bestCard] });
+    recordExchangeInfo(game, dalmuti, { received: [bestCard] });
     logEvent(game, `${peon.name}(빈민) → ${dalmuti.name}(달무리): 최고 카드 1장 헌납 (내용 비공개)`);
   }
 
@@ -903,18 +910,26 @@ async function handleButton(interaction) {
   if (customId === "lobby_leave") return lobbyLeave(interaction);
   if (customId === "lobby_start") return lobbyStart(interaction);
 
-  if (customId === "check_received") {
+  if (customId === "check_exchange") {
     const game = games.get(interaction.channelId);
-    const cards = game && game.recentReceipts && game.recentReceipts.get(interaction.user.id);
-    if (!cards || cards.length === 0) {
+    const info = game && game.exchangeInfo && game.exchangeInfo.get(interaction.user.id);
+    if (!info || (info.given.length === 0 && info.received.length === 0)) {
       return interaction.reply({
-        content: "이번 카드 교환에서 받은 카드가 없습니다.",
+        content: "이번 카드 교환에서 오간 카드가 없습니다.",
         flags: MessageFlags.Ephemeral,
       });
     }
-    const badges = cards.map((c) => cardBadge(c, ANSI.boldGreen)).join(" ");
+    const parts = [];
+    if (info.received.length > 0) {
+      const badges = info.received.map((c) => cardBadge(c, ANSI.boldGreen)).join(" ");
+      parts.push(`받은 카드 (${info.received.length}장):\n${ansiBlock(badges)}`);
+    }
+    if (info.given.length > 0) {
+      const badges = info.given.map((c) => cardBadge(c, ANSI.dim)).join(" ");
+      parts.push(`낸 카드 (${info.given.length}장):\n${ansiBlock(badges)}`);
+    }
     return interaction.reply({
-      content: `🎴 이번 카드 교환에서 받은 카드 (${cards.length}장, 다른 사람에게는 비공개):\n${ansiBlock(badges)}`,
+      content: `🎴 이번 카드 교환 내역 (다른 사람에게는 비공개)\n` + parts.join("\n"),
       flags: MessageFlags.Ephemeral,
     });
   }
@@ -1114,5 +1129,5 @@ module.exports = {
   buildPublicEmbed,
   autoPickGiveIndices,
   autoPickFromIndices,
-  recordReceivedCards,
+  recordExchangeInfo,
 };
