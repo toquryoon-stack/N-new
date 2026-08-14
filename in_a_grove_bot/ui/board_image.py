@@ -121,6 +121,7 @@ def render_board(
     num_font = _load_font(70)
     tag_font = _load_font(84)
     tag_font_small = _load_font(57)  # 스택이 많이 쌓였을 때만 사용
+    suspect_label_font = _load_font(40)  # "용의자N" 라벨
 
     # ── 용의자 3명 배치 ──
     suspect_w, suspect_h = 340, 410
@@ -148,23 +149,25 @@ def render_board(
 
         canvas.paste(suspect_sprite_resized, (x, top_y), suspect_sprite_resized)
 
-        # 번호/값 배지
+        # 머리 위: "용의자N" 라벨 (항상 고정 표시)
+        badge_cx = x + suspect_w // 2
+        badge_cy = top_y - 40
+        badge_color = (220, 30, 30) if is_murderer else WHITE
+        badge_text_color = WHITE if is_murderer else FIGURE_COLOR
+        _draw_name_tag(
+            draw, (badge_cx, badge_cy), f"용의자{i + 1}", badge_color, suspect_label_font,
+            max_width=suspect_w + 80, height=76,
+            text_color=badge_text_color,
+            outline=FIGURE_COLOR, outline_width=5,
+        )
+
+        # 몸통 정중앙: 공개 후 실제 번호 표시
         if show_values and game.suspects and i < len(game.suspects):
             tile = game.suspects[i]
-            label = "X" if tile.is_blank else str(tile.value)
-        else:
-            label = str(i + 1)
-
-        badge_r = 54
-        badge_cx = x + suspect_w // 2
-        badge_cy = top_y - 36
-        badge_color = (220, 30, 30) if is_murderer else WHITE
-        text_color = WHITE if is_murderer else FIGURE_COLOR
-        draw.ellipse(
-            [badge_cx - badge_r, badge_cy - badge_r, badge_cx + badge_r, badge_cy + badge_r],
-            fill=badge_color, outline=FIGURE_COLOR, width=5,
-        )
-        _draw_centered_text(draw, (badge_cx, badge_cy), label, num_font, text_color)
+            value_label = "X" if tile.is_blank else str(tile.value)
+            torso_cx = x + suspect_w // 2
+            torso_cy = top_y + int(suspect_h * 0.38)
+            _draw_centered_text(draw, (torso_cx, torso_cy), value_label, num_font, WHITE)
 
         # 발견자가 확인하지 않은 용의자 표시 (실물 게임처럼, 안 뒤집은 카드가 표시남)
         if is_unseen:
@@ -246,9 +249,10 @@ def _draw_name_tag(
     height: int = 30,
     outline=None,
     outline_width: int = 0,
+    text_color=WHITE,
 ):
-    """플레이어 색 배경 + 흰 글씨 이름표를 그린다 (고발 마커).
-    너무 긴 이름은 말줄임표로 잘라 폭을 맞춘다."""
+    """색 배경 + 글씨의 알약 모양 배지를 그린다 (고발 마커 / 용의자 라벨).
+    너무 긴 텍스트는 말줄임표로 잘라 폭을 맞춘다."""
     cx, cy = center
     pad_x = 20
 
@@ -275,7 +279,7 @@ def _draw_name_tag(
         kwargs["outline"] = outline
         kwargs["width"] = outline_width
     draw.rounded_rectangle([x0, y0, x1, y1], radius=height / 2, fill=color, **kwargs)
-    _draw_centered_text(draw, (cx, cy), display_text, font, WHITE)
+    _draw_centered_text(draw, (cx, cy), display_text, font, text_color)
 
 
 def _draw_magnifier(draw: ImageDraw.ImageDraw, center, radius, color):
