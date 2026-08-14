@@ -369,17 +369,11 @@ class DiscovererStartView(View):
 
         viewed = self.game.set_discoverer_viewed(chosen)
 
-        # 결과 확인 (본인에게만 보임)
+        # 확인한 용의자 2명의 패 + 교체 여부 버튼을 한 메시지에 함께 표시
+        # (교체를 결정할 때 방금 본 패 값이 계속 보여야 하므로 합침)
         embed = EmbedBuilder.discoverer_view_dm(discoverer, viewed, self.game)
-        await interaction.followup.send(embed=embed, ephemeral=True)
-
-        # 2) 교체 여부 (본인에게만 보임)
         swap_view = SwapVictimView(viewed_indices=chosen, timeout=60)
-        await interaction.followup.send(
-            "🔄 용의자와 피해자를 교체하시겠습니까?",
-            view=swap_view,
-            ephemeral=True,
-        )
+        await interaction.followup.send(embed=embed, view=swap_view, ephemeral=True)
 
         timed_out = await swap_view.wait()
         if timed_out or not swap_view.done:
