@@ -344,16 +344,15 @@ function autoPickFromIndices(player, allowedIndices, count) {
   return chosen;
 }
 
-/** 카드를 받은 사람에게만 DM으로 무엇을 받았는지 알려줌 (다른 사람에게는 비공개) */
-async function notifyReceivedCards(game, player, cards) {
+/**
+ * 카드를 받은 사람이 나중에 "받은 카드 확인" 버튼으로 대화방에서 비공개(ephemeral)로 볼 수 있도록 기록.
+ * DM은 사용하지 않음 - 채널의 버튼을 눌러야만 본인만 볼 수 있는 답으로 표시됨.
+ */
+function recordReceivedCards(game, player, cards) {
   if (player instanceof AIPlayer || !player.discordId || cards.length === 0) return;
-  const badges = cards.map((c) => cardBadge(c, ANSI.boldGreen)).join(" ");
-  try {
-    const user = await game.channel.client.users.fetch(player.discordId);
-    await user.send(`🎴 카드 교환으로 카드 ${cards.length}장을 받았습니다 (다른 사람에게는 비공개):\n${ansiBlock(badges)}`);
-  } catch (e) {
-    // DM이 막혀있으면 조용히 무시 (게임 진행에는 영향 없음)
-  }
+  if (!game.recentReceipts) game.recentReceipts = new Map();
+  const existing = game.recentReceipts.get(player.discordId) || [];
+  game.recentReceipts.set(player.discordId, [...existing, ...cards]);
 }
 
 // ════════════════════════════════════════
@@ -437,6 +436,14 @@ function buildActionRow(turnKind) {
   return null;
 }
 
+/** 카드 교환으로 받은 카드가 아직 남아있으면, 대화방에서 눌러 비공개로 확인할 수 있는 버튼 행 */
+function receivedCheckRow(game) {
+  if (!game.recentReceipts || game.recentReceipts.size === 0) return null;
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId("check_received").setLabel("받은 카드 확인").setStyle(ButtonStyle.Secondary)
+  );
+}
+
 async function postStatus(game, embed, rows) {
   const payload = { embeds: [embed], components: rows };
   const prevMessage = game.statusMessage;
@@ -448,14 +455,14 @@ async function postStatus(game, embed, rows) {
 }
 
 async function postLog(game, opts = {}) {
-  const row = buildActionRow(null);
-  await postStatus(game, buildPublicEmbed(game, opts), row ? [row] : []);
+  const rows = [buildActionRow(null), receivedCheckRow(game)].filter(Boolean);
+  await postStatus(game, buildPublicEmbed(game, opts), rows);
 }
 
 async function showTurn(game, currentIdx, tableRank, tableCount, tablePlayerName, turnKind) {
   const embed = buildPublicEmbed(game, { currentIdx, tableRank, tableCount, tablePlayerName });
-  const row = buildActionRow(turnKind);
-  await postStatus(game, embed, row ? [row] : []);
+  const rows = [buildActionRow(turnKind), receivedCheckRow(game)].filter(Boolean);
+  await postStatus(game, embed, rows);
 }
 
 // ════════════════════════════════════════
@@ -537,7 +544,7 @@ async function openGiveSelect(interaction, game) {
     .setMinValues(count)
     .setMaxValues(count)
     .addOptions(options);
-  const restrictNote = allowedIndices ? " (방금 받은 카드 중에서만 고를 수 있습니다)" : "";
+  const restrictNote = allowedIndices ? " (원래 갖고 있던 카드 중에서 골라주세요 - 방금 받은 카드는 제외)" : "";
   await interaction.reply({
     content: `${formatHandLines(player)}\n\n${receiverName}에게 줄 카드 ${count}장을 선택하세요.${restrictNote}`,
     components: [new ActionRowBuilder().addComponents(select)],
@@ -690,7 +697,7 @@ async function playTrick(game, leaderIdx) {
 /**
  * giver가 receiver에게 count장을 줌.
  * allowedIndices가 주어지면 giver.hand의 그 인덱스들 중에서만 골라야 함
- * (카드 교환에서 방금 받은 카드로만 되돌려주도록 제한할 때 사용).
+ * (카드 교환에서 원래 갖고 있던 카드로만 되돌려주도록 - 방금 받은 카드는 제외 - 제한할 때 사용).
  */
 async function giveCards(game, giver, receiver, count, allowedIndices = null) {
   let indices;
@@ -716,13 +723,15 @@ async function giveCards(game, giver, receiver, count, allowedIndices = null) {
     receiver.hand.push(card);
     given.push(card);
   }
-  await notifyReceivedCards(game, receiver, given);
+  recordReceivedCards(game, receiver, given);
   logEvent(game, `${giver.name} → ${receiver.name}: 카드 ${given.length}장 전달 (내용 비공개)`);
 }
 
 async function cardExchange(game) {
   const n = game.players.length;
   if (n < 4 || game.rankings.length === 0) return;
+
+  game.recentReceipts = new Map(); // 이번 라운드 교환 내역만 남도록 초기화
 
   const greatDalmuti = game.players[game.rankings[0]];
   const dalmuti = game.players[game.rankings[1]];
@@ -738,6 +747,9 @@ async function cardExchange(game) {
 
   logEvent(game, `📜 카드 교환 시작`);
 
+  // 대빈민 -> 대달무리: 최고 카드 2장 강제 헌납, 대달무리 -> 대빈민: 원래 갖고 있던 카드 중 골라서 되돌려줌
+  // (둘은 서로 독립적 - 대달무리는 방금 받은 헌납 카드가 아니라 자기 원래 손패에서 고름)
+  const greatDalmutiOwnIndices = greatDalmuti.hand.map((_, i) => i);
   greatPeon.sortHand();
   const bestCards = [];
   for (const card of [...greatPeon.hand]) {
@@ -751,27 +763,25 @@ async function cardExchange(game) {
       greatDalmuti.hand.push(card);
     }
   }
-  // 방금 헌납받은 카드들의 인덱스 (배열 맨 뒤에 push된 것들) - 되돌려줄 때 이 카드로만 제한
-  const tributeIndices1 = bestCards.map((_, i) => greatDalmuti.hand.length - bestCards.length + i);
-  await notifyReceivedCards(game, greatDalmuti, bestCards);
+  recordReceivedCards(game, greatDalmuti, bestCards);
   logEvent(game, `${greatPeon.name}(대빈민) → ${greatDalmuti.name}(대달무리): 최고 카드 2장 헌납 (내용 비공개)`);
 
-  await giveCards(game, greatDalmuti, greatPeon, 2, tributeIndices1);
+  await giveCards(game, greatDalmuti, greatPeon, 2, greatDalmutiOwnIndices);
 
+  // 빈민 -> 달무리: 최고 카드 1장, 달무리 -> 빈민: 원래 갖고 있던 카드 중 골라서 되돌려줌
+  const dalmutiOwnIndices = dalmuti.hand.map((_, i) => i);
   peon.sortHand();
   let bestCard = peon.hand.find((c) => c !== 13);
   if (bestCard === undefined && peon.hand.length > 0) bestCard = peon.hand[0];
-  let tributeIndices2 = null;
   if (bestCard !== undefined) {
     const idx = peon.hand.indexOf(bestCard);
     peon.hand.splice(idx, 1);
     dalmuti.hand.push(bestCard);
-    tributeIndices2 = [dalmuti.hand.length - 1];
-    await notifyReceivedCards(game, dalmuti, [bestCard]);
+    recordReceivedCards(game, dalmuti, [bestCard]);
     logEvent(game, `${peon.name}(빈민) → ${dalmuti.name}(달무리): 최고 카드 1장 헌납 (내용 비공개)`);
   }
 
-  await giveCards(game, dalmuti, peon, 1, tributeIndices2);
+  await giveCards(game, dalmuti, peon, 1, dalmutiOwnIndices);
 
   for (const p of game.players) p.sortHand();
   await postLog(game);
@@ -892,6 +902,22 @@ async function handleButton(interaction) {
   if (customId === "lobby_join") return lobbyJoin(interaction);
   if (customId === "lobby_leave") return lobbyLeave(interaction);
   if (customId === "lobby_start") return lobbyStart(interaction);
+
+  if (customId === "check_received") {
+    const game = games.get(interaction.channelId);
+    const cards = game && game.recentReceipts && game.recentReceipts.get(interaction.user.id);
+    if (!cards || cards.length === 0) {
+      return interaction.reply({
+        content: "이번 카드 교환에서 받은 카드가 없습니다.",
+        flags: MessageFlags.Ephemeral,
+      });
+    }
+    const badges = cards.map((c) => cardBadge(c, ANSI.boldGreen)).join(" ");
+    return interaction.reply({
+      content: `🎴 이번 카드 교환에서 받은 카드 (${cards.length}장, 다른 사람에게는 비공개):\n${ansiBlock(badges)}`,
+      flags: MessageFlags.Ephemeral,
+    });
+  }
 
   if (customId === "cont_yes" || customId === "cont_no") {
     const game = games.get(interaction.channelId);
@@ -1088,5 +1114,5 @@ module.exports = {
   buildPublicEmbed,
   autoPickGiveIndices,
   autoPickFromIndices,
-  notifyReceivedCards,
+  recordReceivedCards,
 };
