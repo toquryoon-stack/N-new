@@ -991,6 +991,17 @@ async function handleSelect(interaction) {
     const available = counts[rank] || 0;
     const jokers = counts[13] || 0;
     const maxCount = available + jokers;
+
+    if (maxCount === 1) {
+      // 낼 수 있는 장수가 1장뿐이면 몇 장 낼지 물어볼 필요가 없으므로 바로 냄
+      await interaction.update({
+        content: `✅ ${ansiBlock(cardBadge(rank, ANSI.boldGreen))} × 1장 냅니다.`,
+        components: [],
+      });
+      game.pending.resolve({ rank, count: 1, jokerCount: 0 });
+      return;
+    }
+
     const options = [];
     for (let c = 1; c <= maxCount; c++) {
       const jUsed = Math.max(0, c - available);
