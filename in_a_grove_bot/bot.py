@@ -13,6 +13,7 @@ from game.game import Game, GameManager
 from game.ai import AIStrategy, reset_ai_names
 from game.enums import GameState
 from ui.embeds import EmbedBuilder
+from ui.board_image import render_board
 from ui.views import (
     LobbyView,
     AckView,
@@ -43,11 +44,18 @@ AI_DELAY = 1.5
 ACK_TIMEOUT = 25
 
 
+def make_board_file(game: Game, **kwargs) -> discord.File:
+    """현재 용의자/피해자/고발 현황을 그린 이미지를 discord.File로 만든다."""
+    buf = render_board(game, **kwargs)
+    return discord.File(fp=buf, filename="board.png")
+
+
 async def send_ack(
     channel: discord.TextChannel,
     game: Game,
     content: Optional[str] = None,
     embed: Optional[discord.Embed] = None,
+    file: Optional[discord.File] = None,
 ):
     """메시지를 보내고, 참가 중인 모든 사람 플레이어가 [확인] 버튼을
     누를 때까지 기다린 뒤 다음 메시지로 진행한다.
@@ -55,9 +63,12 @@ async def send_ack(
     메시지가 연속으로 쏟아지면 플레이어가 놓치기 쉬워서, 각 진행
     알림마다 확인을 받고 넘어가도록 한다. (시간 초과 시 자동 진행)
     """
+    if file is not None and embed is not None:
+        embed.set_image(url=f"attachment://{file.filename}")
+
     view = AckView(game, timeout=ACK_TIMEOUT)
     if not view.pending_ids:
-        await channel.send(content=content, embed=embed)
+        await channel.send(content=content, embed=embed, file=file)
         return
 
     note = "모두 확인하면 다음으로 진행됩니다."
@@ -67,7 +78,7 @@ async def send_ack(
     else:
         content = f"{content}\n-# {note}" if content else note
 
-    await channel.send(content=content, embed=embed, view=view)
+    await channel.send(content=content, embed=embed, file=file, view=view)
     await view.wait()
 
 
@@ -170,7 +181,10 @@ async def run_game(channel: discord.TextChannel, game: Game):
             # ── 6) 공개 & 판정 ──
             result = game.reveal_and_judge()
             embed = EmbedBuilder.reveal_suspects(game, result)
-            await send_ack(channel, game, embed=embed)
+            board_file = make_board_file(
+                game, show_values=True, murderer_idx=result["murderer_idx"]
+            )
+            await send_ack(channel, game, embed=embed, file=board_file)
 
             # ── 7) 결과 적용 ──
             player_results = game.apply_results(result)
@@ -250,6 +264,7 @@ async def discoverer_phase(channel: discord.TextChannel, game: Game):
         await send_ack(
             channel, game,
             content=f"🤖 {discoverer.name}이(가) 용의자 {chosen_text}을(를) 확인했습니다.",
+            file=make_board_file(game),
         )
 
         # AI 교체 결정
@@ -289,6 +304,7 @@ async def discoverer_phase(channel: discord.TextChannel, game: Game):
             await send_ack(
                 channel, game,
                 content=f"⏰ {discoverer.name} 시간 초과! 자동으로 용의자 {chosen_text}을(를) 확인했습니다.",
+                file=make_board_file(game),
             )
         else:
             chosen_text = ", ".join(f"{i + 1}번" for i in sorted(start_view.chosen_indices))
@@ -296,6 +312,7 @@ async def discoverer_phase(channel: discord.TextChannel, game: Game):
                 channel, game,
                 content=f"🔍 {discoverer.color_emoji} {discoverer.name}이(가) "
                         f"용의자 {chosen_text}을(를) 확인했습니다.",
+                file=make_board_file(game),
             )
             if start_view.swapped:
                 await send_ack(
@@ -320,7 +337,7 @@ async def accusation_phase(channel: discord.TextChannel, game: Game):
     game.start_accusation()
 
     embed = EmbedBuilder.accusation_phase(game)
-    await send_ack(channel, game, embed=embed)
+    await send_ack(channel, game, embed=embed, file=make_board_file(game))
 
     is_first_accuser = True  # 발견자(첫 고발자)는 이미 수사 단계에서 2명을 확인했음
 
@@ -363,13 +380,15 @@ async def accusation_phase(channel: discord.TextChannel, game: Game):
             game.make_accusation(accuser.id, chosen_idx)
 
             embed = EmbedBuilder.ai_accusation(accuser, chosen_idx)
-            await send_ack(channel, game, embed=embed)
+            await send_ack(channel, game, embed=embed, file=make_board_file(game))
 
         else:
             # ── 인간 고발 ──
             embed = EmbedBuilder.accusation_turn(game)
+            board_file = make_board_file(game)
+            embed.set_image(url=f"attachment://{board_file.filename}")
             accuse_view = AccusationView(game, timeout=60)
-            msg = await channel.send(embed=embed, view=accuse_view)
+            msg = await channel.send(embed=embed, file=board_file, view=accuse_view)
 
             timed_out = await accuse_view.wait()
             if timed_out or not accuse_view.done:
@@ -381,6 +400,7 @@ async def accusation_phase(channel: discord.TextChannel, game: Game):
                     channel, game,
                     content=f"⏰ {accuser.color_emoji} {accuser.name} 시간 초과! "
                             f"자동으로 **용의자 {chosen_idx + 1}**을(를) 고발합니다.",
+                    file=make_board_file(game),
                 )
             else:
                 chosen_idx = accuse_view.chosen_idx
@@ -389,6 +409,7 @@ async def accusation_phase(channel: discord.TextChannel, game: Game):
                     channel, game,
                     content=f"⚖️ {accuser.color_emoji} **{accuser.name}**이(가) "
                             f"**용의자 {chosen_idx + 1}**을(를) 고발했습니다!",
+                    file=make_board_file(game),
                 )
 
         is_first_accuser = False
