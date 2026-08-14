@@ -119,6 +119,27 @@ async def rules_command(interaction: discord.Interaction):
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
+@tree.command(name="내패", description="지금 내가 가진 타일 정보를 확인합니다. (본인만 보임)")
+async def my_tiles_command(interaction: discord.Interaction):
+    """게임 진행 중 언제든 자신의 타일 정보를 다시 확인한다."""
+    game = manager.get_game(interaction.channel_id)
+    if not game or game.state in (GameState.WAITING, GameState.GAME_OVER):
+        await interaction.response.send_message(
+            "⚠️ 이 채널에는 진행 중인 게임이 없습니다!", ephemeral=True
+        )
+        return
+
+    player = game.players.get(interaction.user.id)
+    if not player or player.is_ai:
+        await interaction.response.send_message(
+            "이 게임에 참가하지 않았습니다!", ephemeral=True
+        )
+        return
+
+    embed = EmbedBuilder.my_tiles(player, game)
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
 # ================================================================
 #  게임 루프
 # ================================================================
@@ -200,7 +221,7 @@ async def send_tile_check_prompt(channel: discord.TextChannel, game: Game):
 
     await channel.send(
         "🃏 아래 버튼을 눌러 본인만 볼 수 있는 타일 정보를 확인하세요! "
-        "모두 확인하면 다음으로 진행됩니다.",
+        "모두 확인하면 다음으로 진행됩니다. (이후에도 `/내패`로 언제든 다시 확인 가능)",
         view=view,
     )
     await view.wait()

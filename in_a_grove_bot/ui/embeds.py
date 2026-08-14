@@ -163,7 +163,7 @@ class EmbedBuilder:
             inline=False,
         )
 
-        embed.set_footer(text="발견자의 수사가 끝나면 고발이 시작됩니다.")
+        embed.set_footer(text="언제든 /내패 명령어로 다시 확인할 수 있습니다.")
         return embed
 
     # ================================================================
@@ -604,6 +604,12 @@ class EmbedBuilder:
                 "• **오답 (맨 위)**: 수사 칩 1개 잃고 + 스택 전체를 무능 칩으로 받음\n"
                 "• 수사 칩 0개 → 패배 (게임 종료)"
             ),
+            inline=False,
+        )
+
+        embed.add_field(
+            name="🃏 내 타일 다시 보기",
+            value="게임 중 언제든 `/내패` 명령어로 내 타일 정보를 다시 확인할 수 있습니다.",
             inline=False,
         )
 
