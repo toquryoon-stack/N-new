@@ -845,6 +845,7 @@ async function playRound(game) {
     logEvent(game, `${game.players[leaderIdx].name}(대달무리)이(가) 선으로 시작!`);
   }
   await postLog(game);
+  game.exchangeInfo = null; // "카드 교환 확인" 버튼은 처음에만 뜨면 되므로, 트릭이 시작되면 더는 띄우지 않음
 
   while (true) {
     const remaining = game.players.map((p, i) => ({ p, i })).filter(({ p }) => !p.finished);
