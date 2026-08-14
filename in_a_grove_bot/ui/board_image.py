@@ -111,7 +111,7 @@ def render_board(
         show_values: True면 각 용의자 위에 실제 타일 번호를 표시 (공개 후)
         murderer_idx: 공개 후 범인 인덱스 (있으면 강조 표시)
     """
-    W, H = 1500, 1400
+    W, H = 1700, 1260
     canvas = Image.new("RGB", (W, H), BG_COLOR)
     draw = ImageDraw.Draw(canvas)
 
@@ -119,13 +119,13 @@ def render_board(
     suspect_sprite = _tint(person_template, FIGURE_COLOR)
 
     num_font = _load_font(70)
-    tag_font = _load_font(56)
-    tag_font_small = _load_font(38)  # 스택이 많이 쌓였을 때만 사용
+    tag_font = _load_font(168)
+    tag_font_small = _load_font(114)  # 스택이 많이 쌓였을 때만 사용
 
     # ── 용의자 3명 배치 ──
     suspect_w, suspect_h = 340, 410
     suspect_sprite_resized = suspect_sprite.resize((suspect_w, suspect_h))
-    gap = 90
+    gap = 220  # 이름표가 훨씬 커져서, 옆 용의자와 안 겹치도록 간격을 넓힘
     total_w = suspect_w * 3 + gap * 2
     start_x = (W - total_w) // 2
     top_y = 130
@@ -172,8 +172,12 @@ def render_board(
             _draw_magnifier(draw, (mark_cx, mark_cy), 38, GOLD)
 
     # ── 고발 마커 (플레이어 색 이름표, 용의자 발밑에서 위로 쌓임 = 실제 스택과 동일) ──
+    # 이름표는 위(용의자 쪽)로만 쌓이므로, 피해자와의 간격은 태그 1개
+    # 높이만 확보하면 충분하다 (스택이 몇 개든 피해자 쪽엔 영향 없음).
     suspect_bottom = top_y + suspect_h
-    tag_base_y = suspect_bottom + 90
+    tag_h = 210
+    tag_h_small = 150
+    tag_base_y = suspect_bottom + 40 + tag_h // 2
 
     for i, x in enumerate(positions):
         stack = game.accusation_stacks.get(i, [])
@@ -182,9 +186,9 @@ def render_board(
         cx = x + suspect_w // 2
         # 칩이 많이 쌓이면 겹치지 않게 살짝 작게 그린다
         font = tag_font if len(stack) <= 3 else tag_font_small
-        tag_h = 82 if len(stack) <= 3 else 60
-        tag_spacing = tag_h + 12
-        tag_max_w = suspect_w + 90
+        h = tag_h if len(stack) <= 3 else tag_h_small
+        tag_spacing = h + 16
+        tag_max_w = 480
         for j, pid in enumerate(stack):
             player = game.players.get(pid)
             if not player:
@@ -194,7 +198,7 @@ def render_board(
             is_top = (j == len(stack) - 1)
             _draw_name_tag(
                 draw, (cx, cy), player.name, color, font,
-                max_width=tag_max_w, height=tag_h,
+                max_width=tag_max_w, height=h,
                 outline=GOLD if is_top else None,
                 outline_width=4 if is_top else 0,
             )
@@ -207,11 +211,14 @@ def render_board(
     )
     victim_sprite = victim_sprite.rotate(-90, expand=True)
     vx = (W - victim_sprite.width) // 2
-    vy = max(tag_base_y + 160, H - victim_sprite.height - 60)
+    # "V" 배지가 피해자 인형보다 위(badge_r + 36px)로 튀어나오므로,
+    # 이름표 맨 아래와 배지 윗부분이 겹치지 않도록 그만큼 더 띄운다.
+    victim_badge_r = 46
+    vy = tag_base_y + tag_h // 2 + 30 + victim_badge_r + 36
     canvas.paste(victim_sprite, (vx, vy), victim_sprite)
 
     # 피해자 배지 ("V" = Victim, 용의자 번호 배지와 같은 스타일)
-    badge_r = 46
+    badge_r = victim_badge_r
     badge_cx, badge_cy = W // 2, vy - 36
     draw.ellipse(
         [badge_cx - badge_r, badge_cy - badge_r, badge_cx + badge_r, badge_cy + badge_r],
@@ -243,7 +250,7 @@ def _draw_name_tag(
     """플레이어 색 배경 + 흰 글씨 이름표를 그린다 (고발 마커).
     너무 긴 이름은 말줄임표로 잘라 폭을 맞춘다."""
     cx, cy = center
-    pad_x = 26
+    pad_x = 36
 
     display_text = text
     while True:
