@@ -5,7 +5,8 @@
   "main": "dalmuti.js",
   "scripts": {
     "start": "node dalmuti.js",
-    "bot": "node discord-bot.js"
+    "bot": "node discord-bot.js",
+    "splendor": "node splendor-bot.js"
   },
   "dependencies": {
     "discord.js": "^14.16.3"
