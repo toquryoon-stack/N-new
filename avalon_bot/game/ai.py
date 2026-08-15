@@ -481,27 +481,30 @@ class AIStrategy:
                 if good_count and len(team_ids) > other_good_available:
                     return Vote.REJECT if random.random() < 0.95 else Vote.APPROVE
 
+            # 멀린: 이번 퀘스트가 게임을 결정짓는 순간(다음 실패=악 승리,
+            # 또는 다음 성공=선 승리)이라면, 아는 사실을 망설임 없이 그대로
+            # 쓴다 - 이 판단이 틀리면 그 자리에서 게임이 끝나버리므로,
+            # "본인이 짠 팀이라서" 같은 다른 어떤 이유보다도 우선한다.
+            if player.role == Role.MERLIN:
+                known_evil = _merlin_known_evil_ids(all_players)
+                evil_in_team = any(pid in known_evil for pid in team_ids)
+                game_deciding = (
+                    completed_fail_count >= cfg.QUESTS_TO_WIN - 1
+                    or completed_success_count >= cfg.QUESTS_TO_WIN - 1
+                )
+                if game_deciding:
+                    return Vote.REJECT if evil_in_team else Vote.APPROVE
+
             # 내가 이 원정대를 짠 리더라면, 이미 스스로 고민해서 구성한
             # 팀이므로 반대할 이유가 거의 없다 (역할별 판단보다 우선).
             if leader_id is not None and player.id == leader_id:
                 return Vote.APPROVE if random.random() < 0.92 else Vote.REJECT
 
-            # 멀린: 자신이 아는 악(모드레드는 안 보임)이 팀에 있는지로 판단.
-            # 다만 매 투표마다 "실패한 팀엔 반대, 성공한 팀엔 찬성"을 너무 정확히
-            # 반복하면 그 상관관계만으로 정체가 드러난다. 그래서 게임이 걸린
-            # 순간이 아니면 판단을 일부러 흐려서 패턴 자체를 숨긴다.
+            # 멀린(평소): 매 투표마다 "실패한 팀엔 반대, 성공한 팀엔 찬성"을
+            # 너무 정확히 반복하면 그 상관관계만으로 정체가 드러난다.
+            # 그래서 게임이 걸린 순간이 아니면 판단을 일부러 흐려서
+            # 패턴 자체를 숨긴다.
             if player.role == Role.MERLIN:
-                known_evil = _merlin_known_evil_ids(all_players)
-                evil_in_team = any(pid in known_evil for pid in team_ids)
-                game_deciding = completed_fail_count >= cfg.QUESTS_TO_WIN - 1
-
-                if game_deciding:
-                    # 악이 한 번만 더 실패시키면 지는 상황에서는 들킬 위험보다
-                    # 승리가 훨씬 중요하므로 아는 정보를 분명하게 활용한다.
-                    if evil_in_team:
-                        return Vote.REJECT if random.random() < 0.85 else Vote.APPROVE
-                    return Vote.APPROVE if random.random() < 0.95 else Vote.REJECT
-
                 # 평소에는 가끔(20%) 아는 정보를 일부러 무시하고, 정보가 없는
                 # 평범한 선과 똑같은 기준으로 판단해서 투표 패턴에 잡음을 섞는다.
                 if random.random() < 0.2:
