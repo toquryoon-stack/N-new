@@ -370,6 +370,7 @@ async def quest_phase(channel: discord.TextChannel, game: Game):
                 fail_count=game.fail_count,
                 team_ids=team_ids,
                 all_players=game.player_list,
+                requires_double_fail=quest.requires_double_fail,
             )
             game.cast_quest_vote(pid, vote)
 

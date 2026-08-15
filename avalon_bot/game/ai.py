@@ -86,6 +86,23 @@ def _merlin_known_evil_ids(all_players: List[Player]) -> set:
     }
 
 
+# 실패 담당을 정할 때 "정체가 드러나도 상대적으로 덜 아까운" 순서.
+# 숫자가 작을수록 먼저 실패를 담당한다 (위장 능력이 없는 역할을 우선 소모).
+#   암살자/하수인 - 위장 능력이 없어 들켜도 잃을 게 적다
+#   모르가나      - 퍼시벌에게 멀린으로 보이는 위장이 아깝다
+#   모드레드      - 멀린에게도 안 보이는 유일한 패라 가장 아깝다
+_EXPOSE_PRIORITY = {
+    Role.ASSASSIN: 0,
+    Role.MINION: 0,
+    Role.MORGANA: 1,
+    Role.MORDRED: 2,
+}
+
+
+def _expose_priority(role: Optional[Role]) -> int:
+    return _EXPOSE_PRIORITY.get(role, 0)
+
+
 def _score_merlin_candidates(
     candidate_ids: List[int],
     quest_history: List[dict],
@@ -131,18 +148,47 @@ def _score_merlin_candidates(
 def _get_confirmed_evil_ids(quest_history: List[dict]) -> set:
     """투표 결과만으로 100% 확정할 수 있는 악을 찾는다.
 
-    2인 원정대에서 실패가 2개 나왔다면, 그 2명 모두 실패를 냈다는 뜻이고
-    선은 절대 실패를 낼 수 없으므로 둘 다 확정적으로 악이다.
-    이 정보는 (인간이든 AI든) 누구나 공개된 결과만 보고 알 수 있으므로
-    멀린을 포함한 모든 선 진영이 활용할 수 있다 - 심지어 모드레드처럼
+    어떤 원정대의 실패 수가 인원수와 같다면(전원이 실패를 냈다는 뜻),
+    선은 절대 실패를 낼 수 없으므로 그 팀 전원이 확정적으로 악이다.
+    (2인 팀에서 실패 2개가 가장 흔한 경우지만, 3인 이상이어도 전원 실패라면
+    마찬가지로 100% 확정된다.) 이 정보는 누구나 공개된 결과만 보고 알 수
+    있으므로 멀린을 포함한 모든 선 진영이 활용할 수 있다 - 모드레드처럼
     멀린에게 원래 안 보이는 악도 이렇게 들키면 정체가 드러난다.
     """
     confirmed = set()
     for hist in quest_history:
         team_ids = hist.get("team_ids", [])
-        if len(team_ids) == 2 and hist.get("fail_count", 0) == 2:
+        if team_ids and hist.get("fail_count", 0) == len(team_ids):
             confirmed.update(team_ids)
     return confirmed
+
+
+def _min_forced_evil_overlap(candidate_ids, quest_history: List[dict]) -> int:
+    """과거 원정대 기록만으로, 후보 팀(candidate_ids)에 최소 몇 명의 악이
+    반드시 포함되는지 하한선을 계산한다 (전원 확정까지는 아니어도 되는 경우).
+
+    과거 원정대(인원 n, 실패 k)에서 선일 수 있는 인원은 최대 (n-k)명이다.
+    후보 팀과 그 원정대가 겹치는 인원(overlap)이 (n-k)명을 넘어서면,
+    그 초과분만큼은 아무리 좋게 봐도 악일 수밖에 없다.
+    예: 3인 원정대에서 실패가 2개 나왔다면 그 팀의 선은 최대 1명이므로,
+    그 3명 중 아무 2명을 묶어 새 원정대를 꾸려도 그 안엔 최소 1명의 악이
+    포함된다는 게 논리적으로 확정된다 - 누가 정확히 악인지는 몰라도,
+    이 조합 자체를 원정대로 승인하면 안 된다는 것만은 확실하다.
+    """
+    candidate_ids = set(candidate_ids)
+    worst = 0
+    for hist in quest_history:
+        team_ids = hist.get("team_ids", [])
+        n = len(team_ids)
+        if n == 0:
+            continue
+        fail_count = hist.get("fail_count", 0)
+        max_good = n - fail_count
+        overlap = len(candidate_ids & set(team_ids))
+        forced_evil = overlap - max_good
+        if forced_evil > worst:
+            worst = forced_evil
+    return worst
 
 
 def _success_trust_scores(quest_history: List[dict]) -> Dict[int, float]:
@@ -229,124 +275,138 @@ class AIStrategy:
         Returns:
             선택된 player_id 리스트
         """
-        player_ids = [p.id for p in all_players]
-        confirmed_evil = _get_confirmed_evil_ids(quest_history)
-        # 과거에 성공한 원정대에 있었던 사람일수록 선일 확률이 높다고 보고
-        # (교묘하게 속인 악일 수도 있으니 절대적이진 않다) 우선 고려한다.
-        trust = _success_trust_scores(quest_history)
+        def _build_once() -> List[int]:
+            player_ids = [p.id for p in all_players]
+            confirmed_evil = _get_confirmed_evil_ids(quest_history)
+            # 과거에 성공한 원정대에 있었던 사람일수록 선일 확률이 높다고 보고
+            # (교묘하게 속인 악일 수도 있으니 절대적이진 않다) 우선 고려한다.
+            trust = _success_trust_scores(quest_history)
 
-        if leader.is_evil:
-            # ── 악 리더 전략 ──
-            # 자기 자신은 포함 (의심 회피)
-            team = [leader.id]
+            if leader.is_evil:
+                # ── 악 리더 전략 ──
+                # 자기 자신은 포함 (의심 회피)
+                team = [leader.id]
 
-            # 악 동료 중 1명을 포함 (퀘스트 실패를 위해)
-            evil_allies = [
-                p.id for p in all_players
-                if p.is_evil and p.id != leader.id
-            ]
-            if evil_allies:
-                # 70% 확률로 악 동료 1명 포함 - 이미 정체가 탄로난 동료보다는
-                # 아직 안 들킨 동료를 우선해서 더 의심을 사지 않도록 한다
-                if random.random() < 0.7:
-                    not_exposed = [pid for pid in evil_allies if pid not in confirmed_evil]
-                    pool = not_exposed if not_exposed else evil_allies
-                    team.append(random.choice(pool))
-
-            # 나머지는 선 진영에서 채움 (의심 회피)
-            good_players = [
-                p.id for p in all_players
-                if p.is_good and p.id not in team
-            ]
-            random.shuffle(good_players)
-            while len(team) < team_size and good_players:
-                team.append(good_players.pop())
-
-            # 부족하면 아무나
-            remaining = [pid for pid in player_ids if pid not in team]
-            random.shuffle(remaining)
-            while len(team) < team_size and remaining:
-                team.append(remaining.pop())
-
-        else:
-            # ── 선 리더 전략 ──
-            team = [leader.id]
-
-            if leader.role == Role.MERLIN:
-                # 멀린: 자신이 아는 악(모드레드는 안 보임) + 투표로 탄로난 악을 피해서 선택
-                known_evil = _merlin_known_evil_ids(all_players) | confirmed_evil
-                believed_good = [
+                # 악 동료 중 1명을 포함 (퀘스트 실패를 위해)
+                evil_allies = [
                     p.id for p in all_players
-                    if p.id != leader.id and p.id not in known_evil
+                    if p.is_evil and p.id != leader.id
                 ]
-                believed_good = _weighted_order_by_trust(believed_good, trust)
+                if evil_allies:
+                    # 70% 확률로 악 동료 1명 포함 - 이미 정체가 탄로난 동료보다는
+                    # 아직 안 들킨 동료를 우선해서 더 의심을 사지 않도록 한다
+                    if random.random() < 0.7:
+                        not_exposed = [pid for pid in evil_allies if pid not in confirmed_evil]
+                        pool = not_exposed if not_exposed else evil_allies
+                        team.append(random.choice(pool))
 
-                # 90% 확률로 아는 악만 피해서 넣기 (10%는 일부러 섞어서 정체 숨기기)
-                if random.random() < 0.9:
-                    while len(team) < team_size and believed_good:
-                        team.append(believed_good.pop())
-                else:
-                    # 약간의 블러핑 - 너무 정확하게만 뽑으면 들키므로 일부러 섞는다
-                    others = [p.id for p in all_players if p.id != leader.id]
-                    random.shuffle(others)
-                    while len(team) < team_size and others:
-                        team.append(others.pop())
-
-            elif leader.role == Role.PERCIVAL:
-                # 퍼시벌: 멀린/모르가나 중 진짜 멀린이라 판단되는 쪽을 포함
-                merlin_morgana = [
+                # 나머지는 선 진영에서 채움 (의심 회피)
+                good_players = [
                     p.id for p in all_players
-                    if p.role in (Role.MERLIN, Role.MORGANA)
+                    if p.is_good and p.id not in team
                 ]
-                believed_merlin = _percival_guess_merlin_id(
-                    merlin_morgana, quest_history
-                )
-                if believed_merlin is not None:
-                    team.append(believed_merlin)
+                random.shuffle(good_players)
+                while len(team) < team_size and good_players:
+                    team.append(good_players.pop())
 
-                # 확정된 악은 최대한 피해서 나머지를 채운다 (성공한 조합 우선)
-                others = [
-                    p.id for p in all_players
-                    if p.id not in team and p.id not in confirmed_evil
-                ]
-                others = _weighted_order_by_trust(others, trust)
-                while len(team) < team_size and others:
-                    team.append(others.pop())
-
-                # 그래도 부족하면 어쩔 수 없이 확정 악도 포함
-                last_resort = [p.id for p in all_players if p.id not in team]
-                random.shuffle(last_resort)
-                while len(team) < team_size and last_resort:
-                    team.append(last_resort.pop())
-
-            else:
-                # 충신: 투표 기록으로 의심되는 사람은 피하고, 확정된 악은 절대 피함.
-                # 과거에 함께 성공시킨 조합이 있으면 그 사람들을 우선 다시 부른다.
-                suspicious = _get_suspicious_ids(quest_history, all_players)
-                safe = [
-                    p.id for p in all_players
-                    if p.id != leader.id and p.id not in suspicious
-                ]
-                safe = _weighted_order_by_trust(safe, trust)
-                while len(team) < team_size and safe:
-                    team.append(safe.pop())
-
-                # 부족하면 의심자 중에서 채우되, 확정 악은 최후의 순간까지 피한다
-                remaining = [
-                    pid for pid in player_ids
-                    if pid not in team and pid not in confirmed_evil
-                ]
+                # 부족하면 아무나
+                remaining = [pid for pid in player_ids if pid not in team]
                 random.shuffle(remaining)
                 while len(team) < team_size and remaining:
                     team.append(remaining.pop())
 
-                # 그래도 부족하면 어쩔 수 없이 확정 악도 포함
-                last_resort = [pid for pid in player_ids if pid not in team]
-                random.shuffle(last_resort)
-                while len(team) < team_size and last_resort:
-                    team.append(last_resort.pop())
+            else:
+                # ── 선 리더 전략 ──
+                team = [leader.id]
 
-        return team[:team_size]
+                if leader.role == Role.MERLIN:
+                    # 멀린: 자신이 아는 악(모드레드는 안 보임) + 투표로 탄로난 악을 피해서 선택
+                    known_evil = _merlin_known_evil_ids(all_players) | confirmed_evil
+                    believed_good = [
+                        p.id for p in all_players
+                        if p.id != leader.id and p.id not in known_evil
+                    ]
+                    believed_good = _weighted_order_by_trust(believed_good, trust)
+
+                    # 90% 확률로 아는 악만 피해서 넣기 (10%는 일부러 섞어서 정체 숨기기)
+                    if random.random() < 0.9:
+                        while len(team) < team_size and believed_good:
+                            team.append(believed_good.pop())
+                    else:
+                        # 약간의 블러핑 - 너무 정확하게만 뽑으면 들키므로 일부러 섞는다
+                        others = [p.id for p in all_players if p.id != leader.id]
+                        random.shuffle(others)
+                        while len(team) < team_size and others:
+                            team.append(others.pop())
+
+                elif leader.role == Role.PERCIVAL:
+                    # 퍼시벌: 멀린/모르가나 중 진짜 멀린이라 판단되는 쪽을 포함
+                    merlin_morgana = [
+                        p.id for p in all_players
+                        if p.role in (Role.MERLIN, Role.MORGANA)
+                    ]
+                    believed_merlin = _percival_guess_merlin_id(
+                        merlin_morgana, quest_history
+                    )
+                    if believed_merlin is not None:
+                        team.append(believed_merlin)
+
+                    # 확정된 악은 최대한 피해서 나머지를 채운다 (성공한 조합 우선)
+                    others = [
+                        p.id for p in all_players
+                        if p.id not in team and p.id not in confirmed_evil
+                    ]
+                    others = _weighted_order_by_trust(others, trust)
+                    while len(team) < team_size and others:
+                        team.append(others.pop())
+
+                    # 그래도 부족하면 어쩔 수 없이 확정 악도 포함
+                    last_resort = [p.id for p in all_players if p.id not in team]
+                    random.shuffle(last_resort)
+                    while len(team) < team_size and last_resort:
+                        team.append(last_resort.pop())
+
+                else:
+                    # 충신: 투표 기록으로 의심되는 사람은 피하고, 확정된 악은 절대 피함.
+                    # 과거에 함께 성공시킨 조합이 있으면 그 사람들을 우선 다시 부른다.
+                    suspicious = _get_suspicious_ids(quest_history, all_players)
+                    safe = [
+                        p.id for p in all_players
+                        if p.id != leader.id and p.id not in suspicious
+                    ]
+                    safe = _weighted_order_by_trust(safe, trust)
+                    while len(team) < team_size and safe:
+                        team.append(safe.pop())
+
+                    # 부족하면 의심자 중에서 채우되, 확정 악은 최후의 순간까지 피한다
+                    remaining = [
+                        pid for pid in player_ids
+                        if pid not in team and pid not in confirmed_evil
+                    ]
+                    random.shuffle(remaining)
+                    while len(team) < team_size and remaining:
+                        team.append(remaining.pop())
+
+                    # 그래도 부족하면 어쩔 수 없이 확정 악도 포함
+                    last_resort = [pid for pid in player_ids if pid not in team]
+                    random.shuffle(last_resort)
+                    while len(team) < team_size and last_resort:
+                        team.append(last_resort.pop())
+
+            return team[:team_size]
+
+        team = _build_once()
+
+        # 선 리더라면, 과거 기록상 "이 조합엔 반드시 악이 있다"고 확정되는
+        # 조합은 최대한 피하도록 몇 번 더 시도해본다 (완전히 피할 방법이
+        # 없으면 마지막 시도를 그대로 사용한다).
+        if leader.is_good:
+            for _ in range(6):
+                if _min_forced_evil_overlap(team, quest_history) == 0:
+                    break
+                team = _build_once()
+
+        return team
 
     # ================================================================
     #  팀 투표 (찬성/반대)
@@ -402,6 +462,13 @@ class AIStrategy:
             # 확정된 악이 팀에 있다면 그 무엇보다 우선해서 반대한다
             if any(pid in confirmed_evil for pid in team_ids):
                 return Vote.REJECT if random.random() < 0.97 else Vote.APPROVE
+
+            # 특정 개인까진 아니어도, 과거 원정대 기록과의 겹침만으로 "이 조합엔
+            # 최소 1명의 악이 반드시 있다"가 논리적으로 확정되는 경우도 있다.
+            # 예: 3인 원정대에서 실패가 2개 나왔다면 그 팀의 선은 최대 1명이므로,
+            # 그중 아무 2명을 다시 묶은 새 원정대도 반드시 악을 1명 이상 포함한다.
+            if _min_forced_evil_overlap(team_ids, quest_history) >= 1:
+                return Vote.REJECT if random.random() < 0.95 else Vote.APPROVE
 
             # 인원수만으로도 확정할 수 있는 경우: 내가 선인데 이 원정대에
             # 빠져 있고, 남은 선 인원만으로는 이 팀 크기를 채울 수 없다면
@@ -501,6 +568,7 @@ class AIStrategy:
         fail_count: int,
         team_ids: List[int],
         all_players: List[Player],
+        requires_double_fail: bool = False,
     ) -> QuestVote:
         """퀘스트에서 성공/실패를 결정한다."""
         if player.is_good:
@@ -509,7 +577,7 @@ class AIStrategy:
 
         # ── 악 전략 ──
         evil_teammates = [
-            p.id for p in all_players
+            p for p in all_players
             if p.id in team_ids and p.is_evil and p.id != player.id
         ]
 
@@ -520,12 +588,21 @@ class AIStrategy:
         if game_deciding:
             return QuestVote.FAIL
 
-        # 2인 원정대에 악이 둘(자신 포함) 있으면, 둘 다 실패를 내는 순간
-        # "실패 2개 = 둘 다 악"이라는 사실이 그대로 공개되어 정체가 탄로난다.
-        # 따라서 반드시 한 명만 실패 담당을 맡도록 조율한다 (id가 작은 쪽 담당).
-        if len(team_ids) == 2 and evil_teammates:
-            designated_failer = min(player.id, *evil_teammates)
-            if player.id != designated_failer:
+        # 원정대에 악이 여럿(자신 포함) 있으면, 필요한 수보다 많이 실패를 내는
+        # 순간 그만큼 정체가 드러날 위험이 커진다. 그래서 이번 퀘스트를
+        # 실패시키는 데 필요한 인원만 "실패 담당"으로 정하고 나머지는 성공을
+        # 내서 정체를 지킨다. 담당자는 정체를 들켜도 상대적으로 덜 아까운
+        # 역할(암살자/하수인) 먼저, 그다음 모르가나, 마지막으로 모드레드
+        # 순으로 정한다 - 위장 능력이 있는 역할일수록 최대한 아낀다.
+        if evil_teammates:
+            fails_needed = 2 if requires_double_fail else 1
+            evil_on_team = evil_teammates + [player]
+            ranked = sorted(
+                evil_on_team,
+                key=lambda p: (_expose_priority(p.role), p.id),
+            )
+            designated_ids = {p.id for p in ranked[:fails_needed]}
+            if player.id not in designated_ids:
                 return QuestVote.SUCCESS
             # 담당자는 아래 일반 판단을 따른다 (매번 실패는 아니게 헷갈리게 낸다)
 
